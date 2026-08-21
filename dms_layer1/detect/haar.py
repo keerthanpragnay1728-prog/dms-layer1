@@ -1,0 +1,150 @@
+"""Haar-cascade face detection front-end (milestone 3).
+
+The landmark model refines points inside a face box; it does not find the
+face. This module supplies the box: OpenCV Haar cascade detection, plus the
+calibrated transform from a raw Haar box to the model's crop box — the same
+kind of square box the training cache was built with (1.3x the 98-point
+extent). Haar boxes frame a face differently (tighter, roughly brow-to-chin),
+so the transform has two parameters, measured against ground truth by
+scripts/verify_haar_pipeline.py and stored in the config:
+
+    side   = max(w, h) * box_scale
+    centre = haar box centre, shifted down by box_shift_y * side
+
+Crop extraction and coordinate mapping reuse dms_layer1/data/crops.py, so
+the detector and the training cache can never disagree on the transform.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from dms_layer1.config import require
+from dms_layer1.data.crops import CropBox, square_box_around
+
+
+class HaarError(Exception):
+    """Raised when the cascade file cannot be found or loaded."""
+
+
+@dataclass(frozen=True)
+class FaceBox:
+    """Raw detector output, OpenCV convention (top-left x, y, width, height)."""
+    x: int
+    y: int
+    w: int
+    h: int
+
+    @property
+    def center(self) -> tuple[float, float]:
+        return self.x + self.w / 2, self.y + self.h / 2
+
+    @property
+    def area(self) -> int:
+        return self.w * self.h
+
+
+def box_iou(a: tuple[float, float, float, float],
+            b: tuple[float, float, float, float]) -> float:
+    """IoU of two (x0, y0, x1, y1) rectangles."""
+    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1])
+    ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    inter = (ix1 - ix0) * (iy1 - iy0)
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    return inter / (area_a + area_b - inter)
+
+
+def haar_to_crop_box(box: FaceBox, box_scale: float, box_shift_y: float) -> CropBox:
+    """Calibrated Haar box -> integer square model crop box."""
+    side_f = max(box.w, box.h) * box_scale
+    cx, cy = box.center
+    cy += box_shift_y * side_f
+    x0_f, y0_f = cx - side_f / 2, cy - side_f / 2
+    x0, y0 = int(np.floor(x0_f)), int(np.floor(y0_f))
+    side = int(np.ceil(max(x0_f + side_f - x0, y0_f + side_f - y0)))
+    return CropBox(x0, y0, side)
+
+
+def calibrate_haar_to_crop(gt_boxes: list[CropBox],
+                           haar_boxes: list[FaceBox]) -> dict:
+    """Given matched (ground-truth crop box, raw Haar box) pairs, measure the
+    box_scale / box_shift_y that map one to the other. Returns medians and
+    quartiles; the medians are the recommended config values."""
+    if len(gt_boxes) != len(haar_boxes) or not gt_boxes:
+        raise ValueError("need equal, non-empty lists of matched boxes")
+    scales, shifts_x, shifts_y = [], [], []
+    for gt, hb in zip(gt_boxes, haar_boxes):
+        side_h = max(hb.w, hb.h)
+        scales.append(gt.side / side_h)
+        gcx, gcy = gt.x0 + gt.side / 2, gt.y0 + gt.side / 2
+        hcx, hcy = hb.center
+        # shift is expressed in units of the CALIBRATED side (= gt side for a
+        # perfect match), matching how haar_to_crop_box applies it
+        shifts_x.append((gcx - hcx) / gt.side)
+        shifts_y.append((gcy - hcy) / gt.side)
+    q = lambda v: {"p25": float(np.percentile(v, 25)),
+                   "median": float(np.median(v)),
+                   "p75": float(np.percentile(v, 75))}
+    return {"n_pairs": len(gt_boxes), "box_scale": q(scales),
+            "box_shift_x": q(shifts_x), "box_shift_y": q(shifts_y)}
+
+
+class HaarFaceDetector:
+    """OpenCV Haar cascade wrapper configured entirely from the YAML config."""
+
+    def __init__(self, cfg: dict):
+        name = require(cfg, "face_detector.haar_cascade")
+        # Resolution order: the cascade vendored in this repo's assets/
+        # (pinned -- OpenCV wheels do not reliably ship the data files, e.g.
+        # opencv 5.x wheels drop them), then OpenCV's bundled data dir.
+        candidates = [Path(__file__).resolve().parents[2] / "assets" / name,
+                      Path(cv2.data.haarcascades) / name]
+        path = next((p for p in candidates if p.is_file()), None)
+        if path is None:
+            raise HaarError(
+                f"Cascade '{name}' not found. Looked in:\n"
+                + "\n".join(f"  {p.parent}" for p in candidates)
+            )
+        self.cascade = cv2.CascadeClassifier(str(path))
+        if self.cascade.empty():
+            raise HaarError(f"Cascade file failed to load: {path}")
+        self.scale_factor = float(require(cfg, "face_detector.scale_factor"))
+        self.min_neighbors = int(require(cfg, "face_detector.min_neighbors"))
+        self.min_size_frac = float(require(cfg, "face_detector.min_size_frac"))
+        self.equalize_hist = bool(require(cfg, "face_detector.equalize_hist"))
+        self.box_scale = float(require(cfg, "face_detector.box_scale"))
+        self.box_shift_y = float(require(cfg, "face_detector.box_shift_y"))
+
+    def detect(self, gray: np.ndarray) -> list[FaceBox]:
+        """All detected faces, largest first. Input must be grayscale."""
+        if gray.ndim != 2:
+            raise ValueError(f"expected a grayscale image, got shape {gray.shape}")
+        img = cv2.equalizeHist(gray) if self.equalize_hist else gray
+        min_side = int(min(gray.shape) * self.min_size_frac)
+        found = self.cascade.detectMultiScale(
+            img, scaleFactor=self.scale_factor, minNeighbors=self.min_neighbors,
+            minSize=(min_side, min_side))
+        boxes = [FaceBox(int(x), int(y), int(w), int(h)) for x, y, w, h in found]
+        return sorted(boxes, key=lambda b: -b.area)
+
+    def primary_crop_box(self, gray: np.ndarray) -> CropBox | None:
+        """The model crop box for the largest detected face, or None. This is
+        the front half of the deployment pipeline: frame -> Haar -> crop box;
+        crops.extract_square / to_frame_space complete it."""
+        boxes = self.detect(gray)
+        if not boxes:
+            return None
+        return haar_to_crop_box(boxes[0], self.box_scale, self.box_shift_y)
+
+
+def gt_crop_box(landmarks98: np.ndarray, expand: float) -> CropBox:
+    """The ground-truth model crop box for an annotated face — by definition
+    identical to what the training cache used."""
+    return square_box_around(landmarks98, expand)

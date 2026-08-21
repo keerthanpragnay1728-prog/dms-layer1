@@ -4,7 +4,11 @@
 
 # milestone 1+ (mapping, loader, visualisation)
 numpy
-opencv-python
+# Pinned below 5: OpenCV 5.x removed the Haar CascadeClassifier API that the
+# milestone-3 face detector depends on. 4.x is what Kaggle ships anyway. The
+# cascade XML itself is vendored in assets/ because even 4.x wheel data files
+# are not guaranteed present in every build.
+opencv-python>=4.8,<5
 pyyaml
 matplotlib
 

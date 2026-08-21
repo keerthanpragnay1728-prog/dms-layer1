@@ -154,6 +154,14 @@ def build_cache(cfg: dict, split: str, out_dir: str | Path | None = None) -> dic
     return manifest
 
 
+def load_cache_from_cfg(cfg: dict, split: str) -> CacheData:
+    """Load the cache from the configured read location (cache.dir). On
+    Kaggle that is a read-only mount: a published dataset or a committed
+    notebook's output attached via Add Input; locally, wherever the build
+    wrote. Build-time code uses preprocess.out_dir instead."""
+    return load_cache(require(cfg, "cache.dir"), split)
+
+
 def load_cache(cache_dir: str | Path, split: str) -> CacheData:
     """Load one split's cache into RAM, validating file consistency."""
     cache_dir = Path(cache_dir)

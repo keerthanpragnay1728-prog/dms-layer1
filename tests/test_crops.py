@@ -63,3 +63,32 @@ def test_extract_resizes_small_and_large():
     big = extract_square(img, CropBox(10, 10, 200), out_size=128)   # shrink
     small = extract_square(img, CropBox(10, 10, 40), out_size=128)  # enlarge
     assert big.shape == small.shape == (128, 128)
+
+
+def test_point_round_trip_within_a_pixel():
+    """Milestone-3 requirement: a point mapped to crop space and back lands
+    within a pixel of where it started — verified through the coordinate
+    algebra (exact) AND through actual image content (a marker survives
+    extract_square + resize and maps back to its origin), which would catch
+    any off-by-one or axis swap in the extraction that pure algebra cannot."""
+    S = 128
+    # coordinate algebra through crop-pixel space: exact
+    rng = np.random.default_rng(7)
+    box = CropBox(37, 55, 256)
+    pts = rng.uniform([37, 55], [37 + 256, 55 + 256], size=(300, 2))
+    crop_px = to_crop_space(pts, box) * S
+    back = to_frame_space(crop_px / S, box)
+    assert np.abs(back - pts).max() < 1e-9
+
+    # image content: bright 3x3 marker, extract + resize, intensity centroid,
+    # map back. Pixel (r, c) spans [c, c+1) x [r, r+1), centre at +0.5.
+    for box in (CropBox(100, 100, 256), CropBox(90, 110, 250)):   # int & non-int ratio
+        img = np.zeros((400, 400), dtype=np.uint8)
+        img[156:159, 212:215] = 255                # continuous centre (213.5, 157.5)
+        crop = extract_square(img, box, S)
+        ys, xs = np.nonzero(crop)
+        w = crop[ys, xs].astype(np.float64)
+        centroid_px = np.array([(xs * w).sum(), (ys * w).sum()]) / w.sum()
+        back = to_frame_space((centroid_px + 0.5) / S, box)
+        err = np.abs(back - (213.5, 157.5))
+        assert err.max() <= 1.0, f"content round trip off by {err} px (box {box})"

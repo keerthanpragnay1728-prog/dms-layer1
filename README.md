@@ -41,9 +41,12 @@ Conventions (documented in the schema file, enforced by tests):
 1. **(closed)** Scaffolding, config system, WFLW loader, 98→24 mapping,
    verification overlays. Mapping confirmed correct against the real
    annotation file — see [docs/milestone1_verdict.md](docs/milestone1_verdict.md).
-2. **(current)** Crop cache (one-time preprocess to a uint8 array +
-   crop-space labels).
-3. Haar face detection wrapper + crop/resize/coordinate round-trip (with test).
+2. **(closed)** Crop cache (one-time preprocess to a uint8 array +
+   crop-space labels). Verified on real WFLW: 7,500 + 2,500 faces, label
+   round-trip 0.00005 px, previews confirmed. The cache is attached to
+   training notebooks read-only via `cache.dir` in the config.
+3. **(current)** Haar face detection wrapper + crop/resize/coordinate
+   round-trip (with test).
 4. Model, training loop, augmentation (flip-index unit test), checkpointing,
    epoch-level resume, CSV metrics.
 5. Evaluation: NME overall / per group / per WFLW subset, failure rate @10%,
@@ -91,9 +94,30 @@ to `preprocess.cache_size`, stored per split as parallel `.npy` arrays with
 to frame coordinates), and the attribute flags (for per-subset evaluation).
 The script verifies its own output: read-back plus a label round-trip against
 a fresh parse of the annotations (float32 rounding only), and renders preview
-grids for an eyeball check. Publish `/kaggle/working/cache` as a Kaggle
-dataset; training (milestone 4) loads it fully into RAM and augments on the
-fly.
+grids for an eyeball check. The cache is attached to later notebooks as a
+read-only input (`cache.dir` in the config points at the mount — a published
+dataset or a committed notebook's output); training (milestone 4) loads it
+fully into RAM and augments on the fly.
+
+## Milestone 3: Haar face-detection front-end
+
+`notebooks/kaggle_milestone3.ipynb`, or directly:
+
+```bash
+python scripts/verify_haar_pipeline.py --config configs/layer1_base.yaml --split test
+```
+
+`dms_layer1/detect/haar.py` wraps the OpenCV cascade (the XML is vendored in
+`assets/` — OpenCV 5.x wheels dropped both the cascade API and the data
+files, so `opencv-python` is pinned `<5` and the file is pinned in-repo) and
+maps a raw Haar box to the model's crop box via two calibrated config values
+(`face_detector.box_scale`, `box_shift_y`). The verification script measures
+that calibration against ground truth on real WFLW, reports detection rates
+overall and per subset, landmark containment, the exact coordinate
+round-trip, and CPU timing, and renders matched/missed previews. Crop
+extraction and coordinate mapping reuse `data/crops.py`, so the detector and
+the training cache cannot disagree on the transform (unit-tested, including
+an image-content round-trip within one pixel).
 
 Local smoke test without the dataset (schematic faces, code-path check only,
 loudly labelled as such): add `--synthetic` to either script.

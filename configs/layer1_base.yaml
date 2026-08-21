@@ -47,12 +47,33 @@ preprocess:
                        # translation augmentation bridges the gap to Haar
                        # boxes, which milestone 3 will quantify)
   num_preview: 16      # crops rendered per split for the eyeball check
-  out_dir: /kaggle/working/cache
+  out_dir: /kaggle/working/cache   # where build_crop_cache WRITES
 
-# ----- milestones 3-4: detector + training (settings agreed up front; the
-# ----- code that reads them lands in those milestones) -----------------------
+# Where training/evaluation READS the built cache. On Kaggle this is a
+# read-only mount: either a published dataset path, or (as currently used)
+# the committed output of the milestone-2 notebook attached via
+# Add Input -> Notebooks. Locally, point at wherever the cache was built.
+cache:
+  dir: /kaggle/input/notebook1aae8c57db/cache
+
+# ----- milestone 3: Haar face detection front-end ----------------------------
 face_detector:
   haar_cascade: haarcascade_frontalface_default.xml   # shipped with OpenCV
+  scale_factor: 1.1    # detectMultiScale pyramid step
+  min_neighbors: 5
+  min_size_frac: 0.08  # min face side as a fraction of min(image h, w)
+  equalize_hist: true  # histogram-equalise before detection
+  # Calibration from a raw Haar box to the model's crop box (the same kind
+  # of box the cache was built with): side = max(w, h) * box_scale, centre
+  # shifted down by box_shift_y * side. PROVISIONAL values -- run
+  # scripts/verify_haar_pipeline.py on real WFLW; it measures these against
+  # the ground-truth crop boxes and prints recommended replacements.
+  box_scale: 1.45
+  box_shift_y: 0.10
+  match_iou: 0.30      # Haar box <-> annotated face matching threshold
+
+# ----- milestone 4: training (settings agreed up front; the code that reads
+# ----- them lands in that milestone) -----------------------------------------
 model:
   input_size: 112      # network input resolution (square, grayscale)
   num_points: 24
