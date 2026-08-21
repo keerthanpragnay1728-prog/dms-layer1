@@ -76,6 +76,25 @@ The dataset root lives in `configs/layer1_base.yaml` under `dataset.root`
 (default: the Kaggle mount). The loader fails with a listing of what it found
 if the path is wrong — it never guesses silently.
 
+## Milestone 2: crop cache
+
+`notebooks/kaggle_milestone2.ipynb`, or directly:
+
+```bash
+python scripts/build_crop_cache.py --config configs/layer1_base.yaml --split both
+```
+
+One-time preprocess (every image decoded exactly once): square grayscale
+crops around each face's 98-point extent (`preprocess.crop_expand`), resized
+to `preprocess.cache_size`, stored per split as parallel `.npy` arrays with
+[0,1] crop-space labels for our 24 points, the crop boxes (for mapping back
+to frame coordinates), and the attribute flags (for per-subset evaluation).
+The script verifies its own output: read-back plus a label round-trip against
+a fresh parse of the annotations (float32 rounding only), and renders preview
+grids for an eyeball check. Publish `/kaggle/working/cache` as a Kaggle
+dataset; training (milestone 4) loads it fully into RAM and augments on the
+fly.
+
 Local smoke test without the dataset (schematic faces, code-path check only,
 loudly labelled as such): add `--synthetic` to either script.
 

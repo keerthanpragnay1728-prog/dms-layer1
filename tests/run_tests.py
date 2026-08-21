@@ -16,7 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-MODULES = ["tests.test_schema", "tests.test_wflw_parser", "tests.test_frame"]
+MODULES = ["tests.test_schema", "tests.test_wflw_parser", "tests.test_frame",
+           "tests.test_crops", "tests.test_cache"]
 
 
 def main() -> int:

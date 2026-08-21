@@ -39,9 +39,14 @@ visualize:
   out_dir: /kaggle/working/m1_overlays
   inset_size: 320      # pixel width of the zoomed eye/mouth insets
 
-# ----- milestone 2: crop cache (implemented after the mapping is confirmed) --
+# ----- milestone 2: crop cache (one-time preprocess; see data/cache.py) -----
 preprocess:
   cache_size: 128      # cached grayscale crop resolution (uint8, HxW)
+  crop_expand: 1.30    # square crop side = 1.3 x the 98-point extent
+                       # (~15% context margin each side; train-time scale/
+                       # translation augmentation bridges the gap to Haar
+                       # boxes, which milestone 3 will quantify)
+  num_preview: 16      # crops rendered per split for the eyeball check
   out_dir: /kaggle/working/cache
 
 # ----- milestones 3-4: detector + training (settings agreed up front; the
