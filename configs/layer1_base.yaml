@@ -58,7 +58,8 @@ cache:
 
 # ----- milestone 3: Haar face detection front-end ----------------------------
 face_detector:
-  haar_cascade: haarcascade_frontalface_default.xml   # shipped with OpenCV
+  # resolved from this repo's assets/ (vendored copy), cv2.data as fallback
+  haar_cascade: haarcascade_frontalface_default.xml
   # Operating point adopted from the pose sweep (scripts/sweep_haar_pose.py,
   # decision recorded in docs/milestone3_notes.md): vs the old (1.10, 5)
   # it lifts pose detection 17.8% -> 33.7% and no-flag 79.8% -> 86.8% at
@@ -71,11 +72,14 @@ face_detector:
   equalize_hist: true  # histogram-equalise before detection
   # Calibration from a raw Haar box to the model's crop box (the same kind
   # of box the cache was built with): side = max(w, h) * box_scale, centre
-  # shifted down by box_shift_y * side. PROVISIONAL values -- run
-  # scripts/verify_haar_pipeline.py on real WFLW; it measures these against
-  # the ground-truth crop boxes and prints recommended replacements.
-  box_scale: 1.45
-  box_shift_y: 0.10
+  # shifted down by box_shift_y * side. Adopted from the containment grid
+  # search on real WFLW: 99.73% landmark containment, vs 98.47% for
+  # (1.45, 0.13) and 82.81% for the median fit (docs/milestone3_notes.md).
+  # Cost flag: the bigger box means less face per pixel at deploy time --
+  # quantified in the docs; milestone 6 measures the NME gap GT-box vs
+  # Haar-box before any counter-measure is taken.
+  box_scale: 1.75
+  box_shift_y: 0.08
   match_iou: 0.30      # Haar box <-> annotated face matching threshold
   # Profile-face fallback for turned heads: when the frontal cascade finds
   # nothing, run the profile cascade on the image and its mirror. OFF until

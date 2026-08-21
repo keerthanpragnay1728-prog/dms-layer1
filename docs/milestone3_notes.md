@@ -41,13 +41,15 @@ comes back from a Kaggle run, the config stays at (1.45, 0.10).
 
 ## Timing and environment facts
 
-* Haar detection: **median 160 ms/image on the Kaggle CPU** at the original
-  settings (full-pipeline run); the adopted (1.05, 2, 0.08) settings measured
-  **157 ms/image** on the sweep's population. WFLW scene images, not face
-  crops. Relative comparison only — not representative of deployment
-  hardware, where the input is a single camera frame and the detector can
-  run on a downscaled frame and/or every Nth frame with box persistence in
-  between.
+* Haar detection timing on Kaggle CPU: measurements of **identical settings
+  varied 2× across sessions** (160 ms/image in one session, 83 ms in
+  another; the sweep session measured 157 ms for the adopted settings and
+  84 ms for the old baseline). Kaggle CPU allocation is not stable, so no
+  single ms figure is citable as absolute: report timings only as
+  within-session relative comparisons (and later, ours-vs-MediaPipe on
+  identical hardware in the same session). Deployment latency is a separate
+  question anyway — single camera frame, optional downscale, every-Nth-frame
+  detection with box persistence.
 * Coordinate round trip frame → crop space → frame: exact (0.000000000 px).
 * **OpenCV 5.x removed the Haar `CascadeClassifier` API and stopped shipping
   the cascade data files** (observed directly on the opencv 5.0 wheel:
@@ -93,11 +95,38 @@ faces. Doubling of pose detection (17.8% → 33.7%) does not make Haar a
 turned-head detector; it moves the measured ceiling, which the framing
 below reports as measured.
 
-Note: detection-rate, calibration and containment figures for the SHIPPED
-settings come from re-running `verify_haar_pipeline.py` with the updated
-config (the milestone-3 notebook does this) — the numbers above them in
-this file are the pre-sweep baseline. Record the re-run's numbers here when
-they land, including the (1.45, 0.13) shift candidate's containment.
+## Containment at the adopted detector settings, and the calibration decision
+
+Re-run of the verifier at (1.05, 2, 0.08):
+
+| calibration candidate         | containment |
+|-------------------------------|------------:|
+| (1.45, 0.10) previous config  | 98.27%      |
+| (1.45, 0.13) shift candidate  | 98.47%      |
+| (1.12, 0.13) measured medians | 82.81%      |
+| **(1.75, 0.08) grid best**    | **99.73%**  |
+
+**Adopted: (1.75, 0.08).** Containment outranks crop tightness (the same
+argument that kept 1.45 over the median fit), and the grid best converts a
+1.5% landmark-loss rate into 0.27%.
+
+**Flagged cost — less face per pixel at deploy time.** The deploy crop is
+1.75× the Haar side; the ground-truth crop (which training uses) measures
+~1.12× the Haar side at the median, so the deploy crop is ~1.56× wider than
+the training crop. The face spans ~77% of a training crop (1/1.3 expand)
+but only ~49% of a deploy crop — equivalent to a scale-augmentation factor
+of ~0.64, *outside* the configured [0.85, 1.15] range, and it roughly
+shrinks the inter-ocular distance at the 112 px input from ~35 px to
+~22 px. Plan: train the milestone-4 baseline as configured (the NME
+protocol evaluates on ground-truth boxes, unaffected); milestone 6 measures
+NME through the real Haar pipeline vs ground-truth boxes, which prices this
+mismatch directly. If the gap is material, the counter-measures are, in
+order of preference: widen the scale augmentation's lower bound (~0.6) and
+retrain, or fall back to the tighter (1.45, 0.13) at 98.47% containment.
+No silent changes to the training recipe before that number exists.
+
+The full detection-rate table at the shipped settings comes from the same
+re-run (milestone-3 notebook); record it above when it lands.
 
 Honest framing for the report:
 
