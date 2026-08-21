@@ -59,8 +59,14 @@ cache:
 # ----- milestone 3: Haar face detection front-end ----------------------------
 face_detector:
   haar_cascade: haarcascade_frontalface_default.xml   # shipped with OpenCV
-  scale_factor: 1.1    # detectMultiScale pyramid step
-  min_neighbors: 5
+  # Operating point adopted from the pose sweep (scripts/sweep_haar_pose.py,
+  # decision recorded in docs/milestone3_notes.md): vs the old (1.10, 5)
+  # it lifts pose detection 17.8% -> 33.7% and no-flag 79.8% -> 86.8% at
+  # ~157 ms/image, costing unmatched boxes (1.80 -> 5.00 per image --
+  # acceptable: deployment takes the largest box, and WFLW's extra boxes are
+  # largely unannotated faces).
+  scale_factor: 1.05   # detectMultiScale pyramid step
+  min_neighbors: 2
   min_size_frac: 0.08  # min face side as a fraction of min(image h, w)
   equalize_hist: true  # histogram-equalise before detection
   # Calibration from a raw Haar box to the model's crop box (the same kind
