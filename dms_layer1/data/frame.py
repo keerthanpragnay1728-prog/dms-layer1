@@ -19,8 +19,16 @@ from __future__ import annotations
 import numpy as np
 
 # Thresholds used by verify_layout's pass/fail versions of these checks.
-CHIN_TOL_PX = 2.0     # absolute pixels (note: scale-dependent by design flaw;
-                      # diagnose_layout_failures reports IOD-relative margins)
+#
+# CHIN_TOL_IOD replaced an absolute 2.0px tolerance after the milestone-1
+# diagnostic (docs/milestone1_verdict.md): 3% of the outer-corner IOD
+# reproduces the 2px operating point on the real WFLW test set (89.56% vs
+# 89.47% pass on frontal faces, i.e. 2px ~ 3% IOD at the median face scale)
+# while treating small and large faces alike. It is wide enough to absorb
+# the near-tie between neighbouring jaw points on a flat chin, and narrow
+# enough that a genuinely misindexed chin (several % of IOD away) still
+# fails. The residual ~10% failures are pose-driven, not mapping errors.
+CHIN_TOL_IOD = 0.03   # fraction of the outer-corner inter-ocular distance
 PAIR_TOL_FRAC = 0.20  # fraction of the eye-line -> chin distance
 NOSE_TOL_FRAC = 0.35  # fraction of the centroid inter-ocular distance
 
@@ -85,7 +93,7 @@ def nose_offset(frame: FaceFrame) -> np.ndarray:
 
 def check_chin(frame: FaceFrame) -> np.ndarray:
     _, margin = chin_lowest(frame)
-    return margin <= CHIN_TOL_PX
+    return margin <= CHIN_TOL_IOD * frame.iod_corner
 
 
 def check_pair(frame: FaceFrame, i: int, j: int) -> np.ndarray:

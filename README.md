@@ -38,10 +38,11 @@ Conventions (documented in the schema file, enforced by tests):
 
 ## Milestones
 
-1. **(current)** Scaffolding, config system, WFLW loader, 98→24 mapping,
-   verification overlays. *Blocked on visual confirmation of the overlays —
-   nothing trains before the mapping is signed off.*
-2. Crop cache (one-time preprocess to a uint8 array + crop-space labels).
+1. **(closed)** Scaffolding, config system, WFLW loader, 98→24 mapping,
+   verification overlays. Mapping confirmed correct against the real
+   annotation file — see [docs/milestone1_verdict.md](docs/milestone1_verdict.md).
+2. **(current)** Crop cache (one-time preprocess to a uint8 array +
+   crop-space labels).
 3. Haar face detection wrapper + crop/resize/coordinate round-trip (with test).
 4. Model, training loop, augmentation (flip-index unit test), checkpointing,
    epoch-level resume, CSV metrics.

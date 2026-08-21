@@ -86,8 +86,9 @@ def run_checks(records: list[wflw.FaceRecord]) -> list[tuple]:
           down(slice(69, 72)).mean(axis=1) < down(slice(73, 76)).mean(axis=1) + 1.0,
           results, "frontal")
 
-    # Chin: the contour point farthest below the eye line.
-    check("16 is the lowest contour point (chin)",
+    # Chin: the contour point farthest below the eye line (tolerance is
+    # IOD-relative so face scale cannot bias it; see frame.CHIN_TOL_IOD).
+    check("16 is the lowest contour point (chin, tol 3% IOD)",
           frame.check_chin(fr), results, "frontal")
 
     # Chosen yaw pairs sit on opposite sides at similar face-height.

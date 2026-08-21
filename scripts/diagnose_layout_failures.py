@@ -137,12 +137,13 @@ def main() -> int:
         say(f"  failures where lowest is 15 or 17: {pct(near)}")
         for t in (0.01, 0.02, 0.05):
             say(f"  failures with margin <= {t:.0%} of IOD: {pct(m_iod <= t)}")
-    say("  NOTE: the current tolerance is ABSOLUTE 2.0 px — tighter for large"
-        "\n  faces than small ones. Pass rate under IOD-relative tolerances:")
-    say(f"    tol 2.0px (current): {pct(checks['chin lowest'][frontal])}")
+    say("  Tolerance is IOD-relative (scale-fair) since the milestone-1 verdict;"
+        "\n  the originally used absolute 2.0px is shown for comparison:")
+    say(f"    tol 2.0px absolute (original): {pct((chin_margin <= 2.0)[frontal])}")
     for t in REL_CHIN_TOLS:
         rel_ok = chin_margin <= t * iod
-        say(f"    tol {t:.1%} of IOD  : {pct(rel_ok[frontal])}")
+        mark = "  <- current" if abs(t - ff.CHIN_TOL_IOD) < 1e-9 else ""
+        say(f"    tol {t:.1%} of IOD  : {pct(rel_ok[frontal])}{mark}")
 
     # ---- 2: failure rate vs yaw ------------------------------------------
     say("\n=== 2. Failure rate vs estimated head yaw (frontal faces) ===")
