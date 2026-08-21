@@ -31,13 +31,34 @@ class HaarError(Exception):
     """Raised when the cascade file cannot be found or loaded."""
 
 
+def _load_cascade(name: str) -> cv2.CascadeClassifier:
+    """Resolution order: the cascade vendored in this repo's assets/ (pinned
+    -- OpenCV wheels do not reliably ship the data files, e.g. opencv 5.x
+    wheels drop them), then OpenCV's bundled data dir."""
+    candidates = [Path(__file__).resolve().parents[2] / "assets" / name,
+                  Path(cv2.data.haarcascades) / name]
+    path = next((p for p in candidates if p.is_file()), None)
+    if path is None:
+        raise HaarError(
+            f"Cascade '{name}' not found. Looked in:\n"
+            + "\n".join(f"  {p.parent}" for p in candidates)
+        )
+    cascade = cv2.CascadeClassifier(str(path))
+    if cascade.empty():
+        raise HaarError(f"Cascade file failed to load: {path}")
+    return cascade
+
+
 @dataclass(frozen=True)
 class FaceBox:
-    """Raw detector output, OpenCV convention (top-left x, y, width, height)."""
+    """Raw detector output, OpenCV convention (top-left x, y, width, height).
+    `source` records which cascade produced it: 'frontal', 'profile'
+    (left-facing pass) or 'profile_mirrored' (right-facing pass)."""
     x: int
     y: int
     w: int
     h: int
+    source: str = "frontal"
 
     @property
     def center(self) -> tuple[float, float]:
@@ -100,38 +121,44 @@ class HaarFaceDetector:
     """OpenCV Haar cascade wrapper configured entirely from the YAML config."""
 
     def __init__(self, cfg: dict):
-        name = require(cfg, "face_detector.haar_cascade")
-        # Resolution order: the cascade vendored in this repo's assets/
-        # (pinned -- OpenCV wheels do not reliably ship the data files, e.g.
-        # opencv 5.x wheels drop them), then OpenCV's bundled data dir.
-        candidates = [Path(__file__).resolve().parents[2] / "assets" / name,
-                      Path(cv2.data.haarcascades) / name]
-        path = next((p for p in candidates if p.is_file()), None)
-        if path is None:
-            raise HaarError(
-                f"Cascade '{name}' not found. Looked in:\n"
-                + "\n".join(f"  {p.parent}" for p in candidates)
-            )
-        self.cascade = cv2.CascadeClassifier(str(path))
-        if self.cascade.empty():
-            raise HaarError(f"Cascade file failed to load: {path}")
+        self.cascade = _load_cascade(require(cfg, "face_detector.haar_cascade"))
         self.scale_factor = float(require(cfg, "face_detector.scale_factor"))
         self.min_neighbors = int(require(cfg, "face_detector.min_neighbors"))
         self.min_size_frac = float(require(cfg, "face_detector.min_size_frac"))
         self.equalize_hist = bool(require(cfg, "face_detector.equalize_hist"))
         self.box_scale = float(require(cfg, "face_detector.box_scale"))
         self.box_shift_y = float(require(cfg, "face_detector.box_shift_y"))
+        # Optional profile-face fallback for turned heads: runs only when the
+        # frontal cascade finds nothing. The stock profile cascade detects
+        # LEFT-facing profiles, so a mirrored second pass covers right-facing.
+        self.profile_fallback = bool(require(cfg, "face_detector.profile_fallback"))
+        self.profile_cascade = (
+            _load_cascade(require(cfg, "face_detector.profile_cascade"))
+            if self.profile_fallback else None)
+
+    def _run(self, cascade, img: np.ndarray, min_side: int,
+             source: str) -> list[FaceBox]:
+        found = cascade.detectMultiScale(
+            img, scaleFactor=self.scale_factor, minNeighbors=self.min_neighbors,
+            minSize=(min_side, min_side))
+        return [FaceBox(int(x), int(y), int(w), int(h), source)
+                for x, y, w, h in found]
 
     def detect(self, gray: np.ndarray) -> list[FaceBox]:
-        """All detected faces, largest first. Input must be grayscale."""
+        """All detected faces, largest first. Input must be grayscale. With
+        profile_fallback on, the profile passes run only when the frontal
+        cascade finds nothing in the whole image."""
         if gray.ndim != 2:
             raise ValueError(f"expected a grayscale image, got shape {gray.shape}")
         img = cv2.equalizeHist(gray) if self.equalize_hist else gray
         min_side = int(min(gray.shape) * self.min_size_frac)
-        found = self.cascade.detectMultiScale(
-            img, scaleFactor=self.scale_factor, minNeighbors=self.min_neighbors,
-            minSize=(min_side, min_side))
-        boxes = [FaceBox(int(x), int(y), int(w), int(h)) for x, y, w, h in found]
+        boxes = self._run(self.cascade, img, min_side, "frontal")
+        if not boxes and self.profile_fallback:
+            boxes = self._run(self.profile_cascade, img, min_side, "profile")
+            w_img = img.shape[1]
+            for b in self._run(self.profile_cascade, cv2.flip(img, 1),
+                               min_side, "profile_mirrored"):
+                boxes.append(FaceBox(w_img - b.x - b.w, b.y, b.w, b.h, b.source))
         return sorted(boxes, key=lambda b: -b.area)
 
     def primary_crop_box(self, gray: np.ndarray) -> CropBox | None:

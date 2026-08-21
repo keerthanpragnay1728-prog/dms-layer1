@@ -12,9 +12,9 @@ opencv-python>=4.8,<5
 pyyaml
 matplotlib
 
-# milestone 4+ (model + training) — uncomment when training starts
-# torch
-# torchvision
+# milestone 4+ (model + training). torchvision is not needed (no pretrained
+# weights, own dataset pipeline) and stays out until something requires it.
+torch
 
 # milestone 6+ (MediaPipe detector for the ablation)
 # mediapipe

@@ -71,22 +71,44 @@ face_detector:
   box_scale: 1.45
   box_shift_y: 0.10
   match_iou: 0.30      # Haar box <-> annotated face matching threshold
+  # Profile-face fallback for turned heads: when the frontal cascade finds
+  # nothing, run the profile cascade on the image and its mirror. OFF until
+  # scripts/sweep_haar_pose.py shows what it buys and what it costs.
+  profile_fallback: false
+  profile_cascade: haarcascade_profileface.xml
 
 # ----- milestone 4: training (settings agreed up front; the code that reads
 # ----- them lands in that milestone) -----------------------------------------
 model:
   input_size: 112      # network input resolution (square, grayscale)
   num_points: 24
+  width: 32            # channel width; 32 -> ~0.59M params, ~2.4 MB fp32
 train:
   batch_size: 128
-  optimizer: adamw
+  num_workers: 2
+  val_fraction: 0.1    # seeded random split of the train cache (WFLW has no
+                       # subject IDs, so a random face split is the only option)
+  pixel_mean: 0.5      # input normalisation: (x/255 - mean) / std
+  pixel_std: 0.5
+  optimizer: adamw     # adamw | adam
   lr: 0.001
   weight_decay: 0.0001
   schedule: cosine
   epochs: 120
   early_stopping_patience: 20
   loss: l2             # l2 | wing  (selectable for the loss comparison)
-  wing: {w: 10.0, epsilon: 2.0}
+  wing: {w: 10.0, epsilon: 2.0}   # in pixels of the model input
+  augment:
+    rotation_deg: 15
+    scale: [0.85, 1.15]
+    translate_frac: 0.05   # of the model input size
+    brightness: 30         # +- gray levels
+    contrast: 0.2          # alpha in [0.8, 1.2]
+    blur_prob: 0.15
+    flip_prob: 0.5         # horizontal flip WITH landmark index remap
   resume: false        # true -> restore optimiser/scheduler/epoch/RNG state
+  stop_after_epochs: null   # stop cleanly after N epochs this session
+                            # (Kaggle 12h cap); resume continues identically
   checkpoint_dir: /kaggle/working/checkpoints
   metrics_csv: /kaggle/working/metrics.csv
+  curves_png: /kaggle/working/curves.png

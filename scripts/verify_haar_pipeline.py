@@ -65,15 +65,41 @@ def rect(b) -> tuple[float, float, float, float]:
     return (b.x, b.y, b.x + b.w, b.y + b.h)
 
 
-def containment(haar_matches, schema, scale, shift_y) -> float:
+def containment_arrays(haar_matches, schema):
+    """Vectorisation prep: per matched face, the Haar side/centre and the 24
+    ground-truth landmark coordinates."""
+    side = np.array([max(hb.w, hb.h) for _, hb in haar_matches], dtype=np.float64)
+    cx = np.array([hb.center[0] for _, hb in haar_matches])
+    cy = np.array([hb.center[1] for _, hb in haar_matches])
+    lm = np.stack([rec.landmarks98[schema.wflw_indices] for rec, _ in haar_matches])
+    return side, cx, cy, lm
+
+
+def containment(side, cx, cy, lm, scale: float, shift_y: float) -> float:
     """Fraction of matched faces whose 24 landmarks all sit inside the crop
     box derived from their Haar box with the given calibration."""
-    ok = 0
-    for rec, hb in haar_matches:
-        crop = haar_to_crop_box(hb, scale, shift_y)
-        lm01 = to_crop_space(rec.landmarks98[schema.wflw_indices], crop)
-        ok += bool(lm01.min() >= 0.0 and lm01.max() <= 1.0)
-    return ok / max(1, len(haar_matches))
+    s = side * scale
+    x0 = cx - s / 2
+    y0 = cy + shift_y * s - s / 2
+    inside_x = (lm[:, :, 0] >= x0[:, None]) & (lm[:, :, 0] <= (x0 + s)[:, None])
+    inside_y = (lm[:, :, 1] >= y0[:, None]) & (lm[:, :, 1] <= (y0 + s)[:, None])
+    return float(np.mean(np.all(inside_x & inside_y, axis=1)))
+
+
+def best_containment_calibration(side, cx, cy, lm) -> tuple[float, float, float]:
+    """Grid-search (box_scale, box_shift_y) for maximum landmark containment;
+    ties break toward the smallest scale (tighter crop = more face pixels)
+    then the smallest |shift|. Containment is what matters operationally: a
+    median-fit box loses the tails, and a landmark outside the crop is a
+    landmark the model cannot predict."""
+    best = (0.0, None, None)
+    for scale in np.arange(1.10, 1.751, 0.05):
+        for shift in np.arange(0.00, 0.251, 0.01):
+            c = containment(side, cx, cy, lm, float(scale), float(shift))
+            key = (c, -scale, -abs(shift))
+            if best[1] is None or key > (best[0], -best[1], -abs(best[2])):
+                best = (c, float(scale), float(shift))
+    return best
 
 
 def render_matched(image, rec, hb, det, schema, input_size, expand) -> np.ndarray:
@@ -243,25 +269,38 @@ def main() -> int:
 
     say("\n=== 2. Calibration: raw Haar box -> model crop box ===")
     cal = None
+    best = None
     if matched:
         cal = calibrate_haar_to_crop(
             [gt_crop_box(r.landmarks98, expand) for r, _ in matched],
             [hb for _, hb in matched])
+        say("  descriptive median fit (how boxes relate on the typical face —")
+        say("  NOT the recommendation; a median-fit box loses the tails):")
         for k in ("box_scale", "box_shift_x", "box_shift_y"):
             q = cal[k]
-            say(f"  {k:<12} median {q['median']:+.3f}   IQR [{q['p25']:+.3f}, {q['p75']:+.3f}]")
-        say(f"  current config: box_scale={det.box_scale} box_shift_y={det.box_shift_y}")
-        say("  recommended config (paste into face_detector if it differs):")
-        say(f"    box_scale: {cal['box_scale']['median']:.2f}")
-        say(f"    box_shift_y: {cal['box_shift_y']['median']:.2f}")
+            say(f"    {k:<12} median {q['median']:+.3f}   IQR [{q['p25']:+.3f}, {q['p75']:+.3f}]")
+        side, cx, cy, lm = containment_arrays(matched, schema)
+        best = best_containment_calibration(side, cx, cy, lm)
+        say("  recommendation (containment-maximising grid search over")
+        say("  scale 1.10-1.75 x shift 0.00-0.25; ties -> tighter crop):")
+        say(f"    box_scale: {best[1]:.2f}")
+        say(f"    box_shift_y: {best[2]:.2f}")
+        say(f"    (containment {100 * best[0]:.2f}%)")
 
-    say("\n=== 3. Landmark containment in the Haar-derived crop box ===")
+    say("\n=== 3. Landmark containment by calibration candidate ===")
     if matched:
-        cur = containment(matched, schema, det.box_scale, det.box_shift_y)
-        say(f"  with current config values : {100 * cur:6.2f}% of matched faces")
-        rec_ = containment(matched, schema,
-                           cal["box_scale"]["median"], cal["box_shift_y"]["median"])
-        say(f"  with measured medians      : {100 * rec_:6.2f}%")
+        candidates = [
+            (f"current config ({det.box_scale:.2f}, {det.box_shift_y:.2f})",
+             det.box_scale, det.box_shift_y),
+            ("candidate (1.45, 0.13)", 1.45, 0.13),
+            (f"measured medians ({cal['box_scale']['median']:.2f}, "
+             f"{cal['box_shift_y']['median']:.2f})",
+             cal["box_scale"]["median"], cal["box_shift_y"]["median"]),
+            (f"grid best ({best[1]:.2f}, {best[2]:.2f})", best[1], best[2]),
+        ]
+        for label, s_, d_ in candidates:
+            c = containment(side, cx, cy, lm, s_, d_)
+            say(f"  {label:<38} {100 * c:6.2f}% of matched faces")
 
     say("\n=== 4. Coordinate round trip through the deployed crop ===")
     if matched:
@@ -302,7 +341,13 @@ def main() -> int:
         "split": args.split, "n_images": len(images), "n_faces": n_faces,
         "n_matched": len(matched), "n_missed": len(missed),
         "unmatched_haar_boxes": unmatched_boxes,
-        "calibration": cal,
+        "calibration_median_fit": cal,
+        "recommended_containment_max": (
+            {"box_scale": best[1], "box_shift_y": best[2],
+             "containment": best[0]} if best else None),
+        "containment_by_candidate": (
+            {label: containment(side, cx, cy, lm, s_, d_)
+             for label, s_, d_ in candidates} if matched else None),
         "detect_ms_median": float(np.median(detect_ms)) if detect_ms else None,
     }
     with open(out_dir / "m3_results.yaml", "w") as f:

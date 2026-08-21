@@ -45,10 +45,12 @@ Conventions (documented in the schema file, enforced by tests):
    crop-space labels). Verified on real WFLW: 7,500 + 2,500 faces, label
    round-trip 0.00005 px, previews confirmed. The cache is attached to
    training notebooks read-only via `cache.dir` in the config.
-3. **(current)** Haar face detection wrapper + crop/resize/coordinate
-   round-trip (with test).
-4. Model, training loop, augmentation (flip-index unit test), checkpointing,
-   epoch-level resume, CSV metrics.
+3. **(closed)** Haar face detection wrapper + crop/resize/coordinate
+   round-trip (with test). Verified on real WFLW; findings and the pose
+   detection problem in [docs/milestone3_notes.md](docs/milestone3_notes.md);
+   `scripts/sweep_haar_pose.py` measures the tuning/profile-fallback options.
+4. **(current)** Model, training loop, augmentation (flip-index unit test),
+   checkpointing, epoch-level resume, CSV metrics.
 5. Evaluation: NME overall / per group / per WFLW subset, failure rate @10%,
    model size, CPU inference time.
 6. `LandmarkDetector` interface + our implementation + MediaPipe mapped to the
@@ -118,6 +120,38 @@ round-trip, and CPU timing, and renders matched/missed previews. Crop
 extraction and coordinate mapping reuse `data/crops.py`, so the detector and
 the training cache cannot disagree on the transform (unit-tested, including
 an image-content round-trip within one pixel).
+
+## Milestone 4: training
+
+`notebooks/kaggle_milestone4_train.ipynb`, or directly:
+
+```bash
+python train.py --config configs/layer1_base.yaml           # fresh run
+python train.py --config configs/layer1_base.yaml --resume  # continue one
+```
+
+`LandmarkNet` (`dms_layer1/model/net.py`): a small conv-BN-ReLU stack,
+trained from random initialisation (no pretrained weights, by design),
+~0.59 M params / ~2.4 MB fp32 at width 32 — well under the 5 MB budget.
+Output is 24 (x, y) pairs in [0, 1] crop coordinates from a single linear
+layer, bias-initialised to the crop centre. Loss is selectable in the config
+(`train.loss: l2 | wing`). Augmentation runs on the fly over the RAM cache —
+flip (with the landmark index remap, unit-tested), rotation, scale,
+translation, brightness/contrast, blur — as one affine shared by image and
+labels, with per-sample RNG seeded from (seed, epoch, index) so runs are
+reproducible by construction.
+
+Session survival: a kill-safe checkpoint every epoch carrying optimiser,
+scheduler, epoch counter, early-stop state and python/numpy/torch RNG;
+metrics append to a CSV after every epoch; loss/NME curves re-render to a
+PNG each epoch (the "TensorBoard or equivalent" — no extra dependency).
+`tests/test_resume.py` proves a stopped-and-resumed run reproduces an
+uninterrupted one row-for-row, and that a death between the CSV write and
+the checkpoint save cannot duplicate rows. `train.stop_after_epochs` gives a
+clean stop ahead of Kaggle's session cap. Validation is a seeded 10% split
+of the train cache (WFLW has no subject IDs, so a random face split is the
+only option; the subject-independence concern applies to the later in-cabin
+recordings, not WFLW); early stopping tracks val NME (inter-ocular).
 
 Local smoke test without the dataset (schematic faces, code-path check only,
 loudly labelled as such): add `--synthetic` to either script.
