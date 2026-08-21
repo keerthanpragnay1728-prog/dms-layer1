@@ -24,7 +24,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dms_layer1.config import load_config, require
-from dms_layer1.data import wflw
+from dms_layer1.data import frame, wflw
 from dms_layer1.landmarks.schema import format_mapping_table, load_schema
 from dms_layer1.config import resolve_path
 
@@ -71,23 +71,11 @@ def run_checks(records: list[wflw.FaceRecord]) -> list[tuple]:
     check("contour 0-15 image-left of 17-32",
           lf[:, 0:16, 0].mean(axis=1) < lf[:, 17:33, 0].mean(axis=1), results, "frontal")
 
-    # Face-aligned frame for the frontal subset.
-    c_left = lf[:, 60:68].mean(axis=1)                       # (F, 2)
-    c_right = lf[:, 68:76].mean(axis=1)
-    u = c_right - c_left
-    u /= np.linalg.norm(u, axis=1, keepdims=True) + 1e-9     # across the face
-    v = np.stack([-u[:, 1], u[:, 0]], axis=1)                # down the face
-    eye_mid = (c_left + c_right) / 2
-
-    def _proj(idx, axis_vec):
-        pts = lf[:, idx]                       # (F, 2) or (F, k, 2) for slices
-        if pts.ndim == 3:
-            return np.sum((pts - eye_mid[:, None]) * axis_vec[:, None], axis=-1)
-        return np.sum((pts - eye_mid) * axis_vec, axis=-1)
-
-    across = lambda idx: _proj(idx, u)
-    down = lambda idx: _proj(idx, v)
-    face_h = down(16)                                        # eye line -> chin
+    # Face-aligned frame for the frontal subset (shared with the diagnostic
+    # script so both agree exactly on what a failing face is).
+    fr = frame.FaceFrame(lf)
+    across = fr.across
+    down = fr.down
 
     # Upper lids above lower lids. 1px tolerance for closed eyes where the
     # arcs nearly coincide.
@@ -100,7 +88,7 @@ def run_checks(records: list[wflw.FaceRecord]) -> list[tuple]:
 
     # Chin: the contour point farthest below the eye line.
     check("16 is the lowest contour point (chin)",
-          down(16) >= down(slice(0, 33)).max(axis=1) - 2.0, results, "frontal")
+          frame.check_chin(fr), results, "frontal")
 
     # Chosen yaw pairs sit on opposite sides at similar face-height.
     check("contour pair 4/28 on opposite sides",
@@ -108,16 +96,15 @@ def run_checks(records: list[wflw.FaceRecord]) -> list[tuple]:
     check("contour pair 8/24 on opposite sides",
           (across(8) < 0) & (across(24) > 0), results, "frontal")
     check("pair (4,28) height match < 20% eye-chin dist",
-          np.abs(down(4) - down(28)) < 0.20 * face_h, results, "frontal")
+          frame.check_pair(fr, 4, 28), results, "frontal")
     check("pair (8,24) height match < 20% eye-chin dist",
-          np.abs(down(8) - down(24)) < 0.20 * face_h, results, "frontal")
+          frame.check_pair(fr, 8, 24), results, "frontal")
 
     # Nose tip on the facial axis, between the eyes and the mouth.
     check("nose tip 54 below eyes, above upper lip 79",
           (down(54) > 0) & (down(54) < down(79)), results, "frontal")
-    iod = np.linalg.norm(c_right - c_left, axis=1)
     check("nose tip 54 near the facial midline",
-          np.abs(across(54)) < 0.35 * iod, results, "frontal")
+          frame.check_nose_midline(fr), results, "frontal")
 
     # Mouth: corner order and mid ordering on the outer lip.
     check("mouth corner 76 left of corner 82",
