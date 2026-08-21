@@ -1,0 +1,66 @@
+# =============================================================================
+# Base config for Layer 1 experiments.
+#
+# Every script takes --config and reads ONLY from here (plus the landmark
+# schema file this points at). No hardcoded paths or magic numbers in code.
+# Every experiment output is written together with a copy of the config that
+# produced it, so any reported number can be reconstructed.
+# =============================================================================
+
+# Global RNG seed: python `random`, numpy, and (from milestone 4) torch.
+# Documented in README. Change it only as a deliberate experiment.
+seed: 42
+
+# Path to the 24-point schema + WFLW index mapping. Relative paths are
+# resolved against the directory containing THIS config file.
+landmark_schema: landmarks_24.yaml
+
+dataset:
+  # Kaggle mount of the public WFLW dataset. On a different machine, point
+  # this at your local WFLW root instead; the loader fails with a clear
+  # message (listing what it found) if the layout underneath is wrong.
+  root: /kaggle/input/datasets/mrriandmstique/wflw-wider-facial-landmarks-in-the-wild
+  images_dir: WFLW_images
+  annotations_dir: WFLW_annotations
+  # The two full annotation files (98 coords + face rect + 6 attribute flags
+  # + image path per line), relative to annotations_dir.
+  train_list: list_98pt_rect_attr_train_test/list_98pt_rect_attr_train.txt
+  test_list: list_98pt_rect_attr_train_test/list_98pt_rect_attr_test.txt
+  # The 6 binary attribute columns, in file order. Also used to derive the
+  # official test subsets (pose -> "largepose" etc.).
+  attribute_names: [pose, expression, illumination, makeup, occlusion, blur]
+
+# ----- milestone 1: mapping visualisation ------------------------------------
+visualize:
+  split: test          # which annotation list to sample from
+  num_frontal: 4       # faces with no pose/occlusion flag
+  num_largepose: 4     # faces with the pose flag (profile-ish)
+  num_occluded: 4      # faces with the occlusion flag
+  out_dir: /kaggle/working/m1_overlays
+  inset_size: 320      # pixel width of the zoomed eye/mouth insets
+
+# ----- milestone 2: crop cache (implemented after the mapping is confirmed) --
+preprocess:
+  cache_size: 128      # cached grayscale crop resolution (uint8, HxW)
+  out_dir: /kaggle/working/cache
+
+# ----- milestones 3-4: detector + training (settings agreed up front; the
+# ----- code that reads them lands in those milestones) -----------------------
+face_detector:
+  haar_cascade: haarcascade_frontalface_default.xml   # shipped with OpenCV
+model:
+  input_size: 112      # network input resolution (square, grayscale)
+  num_points: 24
+train:
+  batch_size: 128
+  optimizer: adamw
+  lr: 0.001
+  weight_decay: 0.0001
+  schedule: cosine
+  epochs: 120
+  early_stopping_patience: 20
+  loss: l2             # l2 | wing  (selectable for the loss comparison)
+  wing: {w: 10.0, epsilon: 2.0}
+  resume: false        # true -> restore optimiser/scheduler/epoch/RNG state
+  checkpoint_dir: /kaggle/working/checkpoints
+  metrics_csv: /kaggle/working/metrics.csv

@@ -1,0 +1,16 @@
+# Dependency policy: nothing beyond this agreed set without asking first
+# (torch, torchvision, opencv-python, numpy, mediapipe, pyyaml, matplotlib).
+# Kaggle/Colab preinstall most of these, so `pip install -r` is fast there.
+
+# milestone 1+ (mapping, loader, visualisation)
+numpy
+opencv-python
+pyyaml
+matplotlib
+
+# milestone 4+ (model + training) — uncomment when training starts
+# torch
+# torchvision
+
+# milestone 6+ (MediaPipe detector for the ablation)
+# mediapipe
