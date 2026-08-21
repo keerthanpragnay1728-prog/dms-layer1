@@ -95,6 +95,34 @@ faces. Doubling of pose detection (17.8% → 33.7%) does not make Haar a
 turned-head detector; it moves the measured ceiling, which the framing
 below reports as measured.
 
+## FINAL: detection at the shipped settings (1.05, 2, 0.08)
+
+Verifier re-run at commit `dcbe062`, clone provenance confirmed. Every
+subset improved; pose nearly doubled:
+
+| population   | original (1.10, 5) | shipped (1.05, 2) |
+|--------------|-------------------:|------------------:|
+| overall      | 60.04%             | **72.08%**        |
+| no flags     | 82.21%             | **89.33%**        |
+| pose         | 17.79%             | **33.74%**        |
+| expression   | 53.82%             | **71.97%**        |
+| illumination | 63.90%             | **75.64%**        |
+| makeup       | 56.31%             | **74.76%**        |
+| occlusion    | 46.60%             | **60.73%**        |
+| blur         | 51.62%             | **65.46%**        |
+
+Unmatched boxes 1.81 → 5.21 per image (11,029 total) — the accepted cost
+(largest-box policy in a one-face cabin; WFLW extras are largely
+unannotated faces). Coordinate round trip remained exact (0.000000000 px);
+the integer-readout quantisation bound moved 0.79 → 0.95 frame px as the
+median crop side grew 177 → 213 px with the bigger calibrated box (the
+model regresses continuous coordinates, so this bound does not apply to
+its output). Timing this session: 160 ms/image — matching the first
+session rather than the 83 ms one, confirming the session-variance caveat
+below.
+
+**Milestone 3 is closed on these numbers.**
+
 ## Containment at the adopted detector settings, and the calibration decision
 
 Re-run of the verifier at (1.05, 2, 0.08):
@@ -125,8 +153,13 @@ order of preference: widen the scale augmentation's lower bound (~0.6) and
 retrain, or fall back to the tighter (1.45, 0.13) at 98.47% containment.
 No silent changes to the training recipe before that number exists.
 
-The full detection-rate table at the shipped settings comes from the same
-re-run (milestone-3 notebook); record it above when it lands.
+Confirmation from the shipped-settings re-run (larger matched population,
+72.08% detection): the adopted **(1.75, 0.08) holds 99.33%** containment
+and the grid search now recommends (1.75, 0.07) at the same 99.33% — the
+shipped values sit at the optimum, no change. The (1.45, 0.13) candidate
+dropped to 96.61% on this population (from 98.47%), further supporting the
+1.75 decision: the faces the looser detector newly finds are exactly the
+ones a tight box loses landmarks on.
 
 Honest framing for the report:
 
