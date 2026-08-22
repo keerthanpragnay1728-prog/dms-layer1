@@ -101,6 +101,29 @@ flip_permutation: [9, 8, 7, 6, 11, 10,
 # (WFLW papers normalise by outer-corner distance, points 60 and 72.)
 nme_normalisation: {left: left_eye_outer, right: right_eye_outer}
 
-# MediaPipe Face Mesh (478 pts) -> same 24 semantics. Filled in at
-# milestone 6; kept here so both mappings live in one file.
-mediapipe: null
+# MediaPipe Face Mesh -> the same 24 semantics (milestone 6). Requires the
+# 478-point output (refine_landmarks: true; indices 468-477 are the two
+# irises). Index sources, all to be verified by overlay before trust:
+#   image-LEFT eye (mesh "right eye"): 33 outer corner, 160 upper toward
+#     outer, 158 upper toward inner, 133 inner corner, 153 lower toward
+#     inner, 144 lower toward outer. This is the standard 6-point EAR set.
+#   image-RIGHT eye (mesh "left eye"): 362 inner, 385 upper inner,
+#     387 upper outer, 263 outer, 373 lower outer, 380 lower inner.
+#   irises: 468 centre of the image-left iris, 473 image-right.
+#   mouth, outer lip: 61 left corner, 291 right corner, 0 upper mid,
+#     17 lower mid.
+#   axis: 1 nose tip, 152 chin (the standard head-pose points).
+#   contour: 234 image-left at ear level, 58 image-left jaw angle,
+#     454 and 288 their mirrors. These approximate WFLW 4/8/28/24; the
+#     contour group is the least precision-critical (yaw comes from
+#     left/right asymmetry) and the cross-detector offset table in
+#     scripts/compare_detectors.py measures how close they sit.
+# Entry i of `indices` feeds our output point i.
+mediapipe:
+  refine_landmarks: true
+  indices: [33, 160, 158, 133, 153, 144,
+            362, 385, 387, 263, 373, 380,
+            468, 473,
+            61, 291, 0, 17,
+            1, 152,
+            234, 58, 454, 288]

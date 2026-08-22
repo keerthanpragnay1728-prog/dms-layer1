@@ -91,6 +91,27 @@ def _expect_schema_error(raw: dict, tmp_name: str):
     raise AssertionError(f"malformed schema '{tmp_name}' loaded without error")
 
 
+def test_mediapipe_block_loads_and_validates():
+    s = load_schema(SCHEMA_PATH)
+    assert s.mediapipe_indices is not None and len(s.mediapipe_indices) == 24
+    assert len(set(s.mediapipe_indices)) == 24
+    assert all(0 <= i < 478 for i in s.mediapipe_indices)
+    # the iris centres feed the pupils
+    assert s.mediapipe_indices[s.index_of("left_pupil")] == 468
+    assert s.mediapipe_indices[s.index_of("right_pupil")] == 473
+
+    raw = _load_raw()
+    bad = yaml.safe_load(yaml.safe_dump(raw))
+    bad["mediapipe"]["indices"][1] = bad["mediapipe"]["indices"][0]  # duplicate
+    _expect_schema_error(bad, "duplicate mediapipe index")
+    bad = yaml.safe_load(yaml.safe_dump(raw))
+    bad["mediapipe"]["indices"][0] = 478                             # out of range
+    _expect_schema_error(bad, "mediapipe index out of range")
+    bad = yaml.safe_load(yaml.safe_dump(raw))
+    bad["mediapipe"]["indices"] = bad["mediapipe"]["indices"][:23]   # wrong count
+    _expect_schema_error(bad, "short mediapipe index list")
+
+
 def test_malformed_schemas_are_rejected():
     raw = _load_raw()
     bad = yaml.safe_load(yaml.safe_dump(raw))

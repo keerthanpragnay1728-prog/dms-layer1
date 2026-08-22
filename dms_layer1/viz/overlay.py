@@ -61,7 +61,7 @@ def _face_crop_region(lm98: np.ndarray, img_shape) -> tuple[int, int, int, int]:
 
 
 def _render_main_panel(image: np.ndarray, lm98: np.ndarray,
-                       schema: LandmarkSchema) -> np.ndarray:
+                       schema: LandmarkSchema, show_all98: bool = True) -> np.ndarray:
     x0, y0, x1, y1 = _face_crop_region(lm98, image.shape)
     crop = image[y0:y1, x0:x1]
     s = MAIN_HEIGHT / max(1, crop.shape[0])
@@ -69,9 +69,11 @@ def _render_main_panel(image: np.ndarray, lm98: np.ndarray,
                        interpolation=cv2.INTER_CUBIC)
     to_panel = lambda p: ((p[0] - x0) * s, (p[1] - y0) * s)
 
-    for i in range(98):                       # context: the full 98-point set
-        px, py = to_panel(lm98[i])
-        cv2.circle(panel, (int(round(px)), int(round(py))), 2, GRAY_98, -1, cv2.LINE_AA)
+    if show_all98:                            # context: the full 98-point set
+        for i in range(98):
+            px, py = to_panel(lm98[i])
+            cv2.circle(panel, (int(round(px)), int(round(py))), 2, GRAY_98, -1,
+                       cv2.LINE_AA)
 
     for p in schema.points:                   # our 24, colour-coded
         px, py = to_panel(lm98[p.wflw])
@@ -130,7 +132,8 @@ def _render_inset(image: np.ndarray, lm98: np.ndarray, schema: LandmarkSchema,
     return inset
 
 
-def _legend_row(width: int, height: int = 44) -> np.ndarray:
+def _legend_row(width: int, height: int = 44,
+                note: str = "gray dots = all 98 WFLW points") -> np.ndarray:
     row = np.full((height, width, 3), BG, dtype=np.uint8)
     x = 10
     for group, color in GROUP_COLORS.items():
@@ -138,22 +141,37 @@ def _legend_row(width: int, height: int = 44) -> np.ndarray:
         cv2.putText(row, group, (x + 16, height // 2 + 5), FONT, 0.5,
                     (230, 230, 230), 1, cv2.LINE_AA)
         x += 16 + 11 * len(group) + 22
-    note = "gray dots = all 98 WFLW points"
-    cv2.putText(row, note, (x + 10, height // 2 + 5), FONT, 0.5,
-                (160, 160, 160), 1, cv2.LINE_AA)
+    if note:
+        cv2.putText(row, note, (x + 10, height // 2 + 5), FONT, 0.5,
+                    (160, 160, 160), 1, cv2.LINE_AA)
     return row
+
+
+def render_points_overlay(image: np.ndarray, pts24: np.ndarray,
+                          schema: LandmarkSchema, title: str,
+                          inset_size: int = 320) -> np.ndarray:
+    """The same verification canvas, but for 24 points that did not come
+    from a WFLW annotation (e.g. a detector's output). Used to eyeball the
+    MediaPipe mapping on real faces with the milestone-1 checklist."""
+    pts24 = np.asarray(pts24, dtype=np.float64)
+    # unused slots take the centroid so crop extents follow the real points
+    lm98 = np.tile(pts24.mean(axis=0), (98, 1))
+    lm98[schema.wflw_indices] = pts24
+    return render_face_overlay(image, lm98, schema, title, inset_size,
+                               show_all98=False)
 
 
 def render_face_overlay(image: np.ndarray, lm98: np.ndarray,
                         schema: LandmarkSchema, title: str,
-                        inset_size: int = 320) -> np.ndarray:
+                        inset_size: int = 320,
+                        show_all98: bool = True) -> np.ndarray:
     """Full verification canvas for one face. `image` is BGR (or grayscale,
     converted here); `lm98` is (98, 2) in original image coordinates."""
     if image.ndim == 2:
         image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     lm98 = np.asarray(lm98, dtype=np.float64)
 
-    main = _render_main_panel(image, lm98, schema)
+    main = _render_main_panel(image, lm98, schema, show_all98)
     inset_h = MAIN_HEIGHT // 3
     insets = [
         _render_inset(image, lm98, schema, [0, 1, 2, 3, 4, 5, 12], inset_size,
@@ -171,7 +189,9 @@ def render_face_overlay(image: np.ndarray, lm98: np.ndarray,
     body = np.concatenate([main, right_col], axis=1)
     title_row = np.full((36, body.shape[1], 3), BG, dtype=np.uint8)
     cv2.putText(title_row, title, (10, 24), FONT, 0.55, (240, 240, 240), 1, cv2.LINE_AA)
-    return np.concatenate([title_row, body, _legend_row(body.shape[1])], axis=0)
+    note = "gray dots = all 98 WFLW points" if show_all98 else ""
+    return np.concatenate([title_row, body, _legend_row(body.shape[1], note=note)],
+                          axis=0)
 
 
 def make_contact_sheet(canvases: list[np.ndarray], cols: int = 3,

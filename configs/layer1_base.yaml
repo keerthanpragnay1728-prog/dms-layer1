@@ -125,6 +125,15 @@ train:
   metrics_csv: /kaggle/working/metrics.csv
   curves_png: /kaggle/working/curves.png
 
+# ----- milestone 6: the two swappable landmark detectors ---------------------
+detector:
+  # Weights for OUR detector: an exported landmarks24*.pt (preferred) or a
+  # training checkpoint. 'auto' searches /kaggle/input and uses a single
+  # unambiguous hit; several hits raise with the list, never a silent pick.
+  weights: auto
+  mediapipe:
+    min_detection_confidence: 0.5
+
 # ----- milestone 5: test-set evaluation --------------------------------------
 eval:
   # Same-session default; for a separate eval session attach the training

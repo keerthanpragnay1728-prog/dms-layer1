@@ -55,9 +55,11 @@ Conventions, all enforced by tests:
 4. Done. Model, training loop, augmentation, checkpointing and resume.
    The Wing loss run is the baseline: best val NME 5.386% at epoch 113.
    See [docs/milestone4_notes.md](docs/milestone4_notes.md).
-5. In progress. Test set evaluation: NME overall, per landmark group, per
-   WFLW subset, failure rate at 10%, model size, CPU timing.
-6. Planned. The `LandmarkDetector` interface with two implementations,
+5. Done. Test set evaluation. Baseline locked: Wing width 32, 2.37 MB,
+   7.346% overall test NME, 4.089% on no-flag faces. All three runs and
+   the reading of the numbers are in
+   [docs/milestone5_results.md](docs/milestone5_results.md).
+6. In progress. The `LandmarkDetector` interface with two implementations,
    ours and MediaPipe mapped to the same 24 points.
 7. Planned. The frame to frame stability harness comparing both.
 
@@ -110,6 +112,26 @@ python scripts/evaluate.py --config configs/layer1_base.yaml --checkpoint <path>
 python scripts/export_weights.py --config configs/layer1_base.yaml \
     --checkpoint <path>/best.pth --out landmarks24.pt
 ```
+
+Milestone 6, the swappable detectors and the ablation run:
+
+```bash
+python scripts/compare_detectors.py --config configs/layer1_base.yaml --split test
+```
+
+`dms_layer1/detect/interface.py` defines `LandmarkDetector`: a full frame
+in, 24 (x, y) points in frame coordinates out (schema order), or None when
+no face. `OurLandmarkDetector` is the deployment path from milestone 3
+(largest Haar face, calibrated crop box, our model, coordinates mapped
+back). `MediaPipeLandmarkDetector` wraps Face Mesh with refine_landmarks
+and selects the 24 indices defined in `configs/landmarks_24.yaml`, so both
+implementations emit identical semantics. The comparison script renders
+mapping-verification overlays for MediaPipe (checked by eye before the
+mapping is trusted), then reports detection rates, NME on matched and on
+jointly matched faces, a per-point cross-detector offset table, the
+GT-box versus Haar-box price for our model, same-machine timing, and
+footprints. mediapipe is pinned below 1.0: the 1.0 release removed the
+solutions API, and the 0.10 wheels bundle their models in the package.
 
 Most scripts also take `--synthetic`, which runs them on generated
 schematic faces. That exists so the code paths can be exercised on a

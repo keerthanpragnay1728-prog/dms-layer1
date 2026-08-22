@@ -39,6 +39,10 @@ class LandmarkSchema:
     nme_left_index: int   # our index of the left NME reference point
     nme_right_index: int  # our index of the right NME reference point
     source_file: str
+    # MediaPipe Face Mesh source index per output point (478-point mesh),
+    # or None when the schema file has no mediapipe block yet.
+    mediapipe_indices: tuple[int, ...] | None = None
+    mediapipe_refine: bool = True
 
     @property
     def wflw_indices(self) -> list[int]:
@@ -155,12 +159,30 @@ def load_schema(path: str | Path) -> LandmarkSchema:
         if nme[side] not in name_to_index:
             raise SchemaError(f"nme_normalisation.{side}='{nme[side]}' is not a landmark name")
 
+    mp_indices: tuple[int, ...] | None = None
+    mp_refine = True
+    mp_block = raw.get("mediapipe")
+    if mp_block is not None:
+        if not isinstance(mp_block, dict) or "indices" not in mp_block:
+            raise SchemaError("mediapipe block must be a mapping with 'indices'")
+        idx = mp_block["indices"]
+        if not isinstance(idx, list) or len(idx) != NUM_POINTS:
+            raise SchemaError(f"mediapipe.indices must list exactly {NUM_POINTS} entries")
+        if len(set(idx)) != NUM_POINTS:
+            raise SchemaError("mediapipe.indices contains duplicates")
+        if not all(isinstance(i, int) and 0 <= i < 478 for i in idx):
+            raise SchemaError("mediapipe.indices must be ints in 0..477")
+        mp_indices = tuple(idx)
+        mp_refine = bool(mp_block.get("refine_landmarks", True))
+
     return LandmarkSchema(
         points=tuple(points),
         flip_permutation=tuple(flip),
         nme_left_index=name_to_index[nme["left"]],
         nme_right_index=name_to_index[nme["right"]],
         source_file=str(path.resolve()),
+        mediapipe_indices=mp_indices,
+        mediapipe_refine=mp_refine,
     )
 
 

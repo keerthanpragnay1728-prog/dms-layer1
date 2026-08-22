@@ -94,6 +94,38 @@ def load_model(path: str | Path, cfg: dict,
     return model.to(device), meta
 
 
+def resolve_weights(path_or_auto: str | Path) -> Path:
+    """Resolve a weights file for the deployed detector. An explicit path is
+    used as-is; 'auto' (or a missing path) searches /kaggle/input for
+    exported weights (landmarks24*.pt) and falls back to best.pth files. One
+    unambiguous hit is used with a printed note; zero or several raise with
+    the candidate list, because auto-picking between runs would be silent
+    substitution."""
+    path = Path(path_or_auto)
+    if str(path_or_auto) != "auto" and path.is_file():
+        return path
+    kaggle_input = Path("/kaggle/input")
+    exported: list[Path] = []
+    checkpoints: list[Path] = []
+    if kaggle_input.is_dir():
+        for depth in range(1, 6):
+            pattern = "/".join(["*"] * depth)
+            exported += list(kaggle_input.glob(f"{pattern}/landmarks24*.pt"))
+            checkpoints += list(kaggle_input.glob(f"{pattern}/best.pth"))
+    hits = sorted(set(exported)) or sorted(set(checkpoints))
+    if len(hits) == 1:
+        print(f"NOTE: detector weights '{path_or_auto}' not found; using the "
+              f"single candidate {hits[0]}. Set detector.weights explicitly "
+              "to silence this note.")
+        return hits[0]
+    listing = "\n".join(f"    {h}" for h in sorted(set(exported + checkpoints))) or "    (none)"
+    raise FileNotFoundError(
+        f"Detector weights not found: {path_or_auto}\n"
+        f"Weights visible under {kaggle_input}:\n{listing}\n"
+        "Set detector.weights (or pass --weights) to the exact file."
+    )
+
+
 def export_weights(checkpoint_path: str | Path, cfg: dict,
                    out_path: str | Path) -> dict:
     """Strip a training checkpoint down to deployable weights. Verifies the
