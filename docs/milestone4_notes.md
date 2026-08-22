@@ -32,22 +32,39 @@ Note on comparing the loss values themselves: L2 and Wing are different
 functions, so their raw loss magnitudes are not comparable. The comparison
 lives in the NME column, which is loss independent.
 
-## Ceiling probes before locking the baseline
+## Ceiling probes, results
 
-Each is one run of about 7 minutes. All are judged on the milestone 5 test
-report, especially the pupil and eyelid groups, because the pipeline turns
-on eye region precision and the overall average hides it.
+All three runs, same schedule, same seed, same seeded validation split of
+750 faces (identical across runs, so the comparison is on the same faces):
 
-1. Wing loss. Done, see above. It was the most promising lever and it
-   delivered.
-2. Width 48 (`model.width: 48`). The largest width inside the 5 MB budget:
-   about 1.11 M parameters, about 4.4 MB fp32. Width 64 would be about
-   7 MB, over budget. In progress.
-3. A longer schedule (`train.epochs: 200`, fresh run, since the cosine
-   T_max changes and this is not a resume). Probably small gains: the 120
-   epoch runs converged as the learning rate reached its floor, not against
-   the patience limit. Only worth running if width 48 suggests the schedule
-   was binding.
+| run           | params    | size    | best val NME | epoch | s/epoch |
+|---------------|----------:|--------:|-------------:|------:|--------:|
+| l2, width 32  | 592,480   | 2.37 MB | 7.285%       | 99    | 3.3     |
+| wing, width 32| 592,480   | 2.37 MB | 5.386%       | 113   | 3.3     |
+| wing, width 48| 1,106,424 | 4.43 MB | 5.631%       | 111   | 3.8     |
+
+1. Wing loss delivered: a 26% relative NME reduction over L2 at identical
+   size and speed.
+2. Width 48 did not: nearly double the parameters for a slightly worse
+   validation NME, converged (plateau from about epoch 105). On the size of
+   the effect: the standard error of a mean NME over 750 validation faces
+   is roughly 0.1 points, and run to run seed variance for models this size
+   is of the same order, so the 0.245 point deficit is at the edge of
+   noise. The robust claim is not "width 48 is worse" but "the extra
+   capacity buys nothing". Whether the small deficit is mild overfitting
+   can be read off the two metrics CSVs: width 32 finished with train 4.95
+   against val 4.93 (no gap); if width 48 shows train clearly below val,
+   that is the overfitting signature, and if its gap is also near zero the
+   deficit is noise. Either way the conclusion for the report stands: at
+   6,750 training faces and this augmentation, the 24 point task at 112 px
+   input is not capacity limited at width 32, and the smaller model wins on
+   every axis.
+3. The 200 epoch schedule probe was skipped. Both width runs converged as
+   the cosine reached its floor rather than against the patience limit, and
+   width 48 gave no sign the schedule was binding.
+
+Baseline locked: Wing loss, width 32, pending confirmation by the milestone
+5 test set numbers.
 
 ## Val numbers versus citable numbers
 
