@@ -43,6 +43,11 @@ class LandmarkSchema:
     # or None when the schema file has no mediapipe block yet.
     mediapipe_indices: tuple[int, ...] | None = None
     mediapipe_refine: bool = True
+    # Optional second MediaPipe mapping, used only to answer "would a
+    # different index choice change the ablation's conclusion". Populated by
+    # hand from a scripts/verify_mediapipe_mapping.py run on the TRAIN split;
+    # never the mapping the project claims to use.
+    mediapipe_indices_alt: tuple[int, ...] | None = None
 
     @property
     def wflw_indices(self) -> list[int]:
@@ -161,6 +166,7 @@ def load_schema(path: str | Path) -> LandmarkSchema:
 
     mp_indices: tuple[int, ...] | None = None
     mp_refine = True
+    mp_indices_alt = None
     mp_block = raw.get("mediapipe")
     if mp_block is not None:
         if not isinstance(mp_block, dict) or "indices" not in mp_block:
@@ -174,6 +180,14 @@ def load_schema(path: str | Path) -> LandmarkSchema:
             raise SchemaError("mediapipe.indices must be ints in 0..477")
         mp_indices = tuple(idx)
         mp_refine = bool(mp_block.get("refine_landmarks", True))
+        alt = mp_block.get("indices_alt")
+        if alt is not None:
+            if (not isinstance(alt, list) or len(alt) != NUM_POINTS
+                    or not all(isinstance(i, int) and 0 <= i < 478 for i in alt)):
+                raise SchemaError(
+                    f"mediapipe.indices_alt must list exactly {NUM_POINTS} "
+                    "ints in 0..477 when present")
+            mp_indices_alt = tuple(alt)
 
     return LandmarkSchema(
         points=tuple(points),
@@ -183,6 +197,7 @@ def load_schema(path: str | Path) -> LandmarkSchema:
         source_file=str(path.resolve()),
         mediapipe_indices=mp_indices,
         mediapipe_refine=mp_refine,
+        mediapipe_indices_alt=mp_indices_alt,
     )
 
 

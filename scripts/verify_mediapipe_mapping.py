@@ -90,6 +90,105 @@ def say(text: str = "") -> None:
     _lines.append(text)
 
 
+def mesh_features() -> dict[str, tuple[set[int], list[int]]]:
+    """The mesh features MediaPipe publishes, as (vertex set, ordered cycle).
+
+    This is what lets a "some other index is closer" finding be read properly:
+    a neighbouring vertex on the SAME eyelid ring is the same anatomy sampled
+    at a different point along the lid, while an index on another feature
+    would be a real mapping error. Names are in IMAGE space, the opposite of
+    MediaPipe's own naming (its RIGHT_EYE is the viewer's left eye).
+    """
+    from mediapipe.tasks.python.vision import FaceLandmarksConnections as C
+
+    def parts(conns):
+        adj: dict[int, set[int]] = {}
+        for c in conns:
+            adj.setdefault(c.start, set()).add(c.end)
+            adj.setdefault(c.end, set()).add(c.start)
+        start = min(adj)
+        order, prev, cur = [start], None, start
+        while True:
+            nxt = next((v for v in adj[cur] if v != prev and v not in order), None)
+            if nxt is None:
+                break
+            order.append(nxt)
+            prev, cur = cur, nxt
+        # a feature with several concentric rings (the lips) walks only one of
+        # them; the vertex set still covers the whole feature
+        return set(adj), order
+
+    named = [("eye ring, image-left", C.FACE_LANDMARKS_RIGHT_EYE),
+             ("eye ring, image-right", C.FACE_LANDMARKS_LEFT_EYE),
+             ("brow, image-left", C.FACE_LANDMARKS_RIGHT_EYEBROW),
+             ("brow, image-right", C.FACE_LANDMARKS_LEFT_EYEBROW),
+             ("iris, image-left", C.FACE_LANDMARKS_RIGHT_IRIS),
+             ("iris, image-right", C.FACE_LANDMARKS_LEFT_IRIS),
+             ("lips", C.FACE_LANDMARKS_LIPS),
+             ("nose", C.FACE_LANDMARKS_NOSE),
+             ("face oval", C.FACE_LANDMARKS_FACE_OVAL)]
+    return {name: parts(conns) for name, conns in named}
+
+
+def describe_alternative(cfg_idx: int, alt_idx: int,
+                         features: dict[str, tuple[set[int], list[int]]]) -> str:
+    """How a proposed index relates to the configured one, in mesh terms."""
+    def feature_of(i):
+        return next((n for n, (verts, _) in features.items() if i in verts), None)
+
+    fc, fa = feature_of(cfg_idx), feature_of(alt_idx)
+    where_cfg = f"configured is on {fc}" if fc else "configured is not on a named feature"
+    if fa is None:
+        return ("alternative is an INTERIOR mesh vertex, on no named feature "
+                f"({where_cfg})")
+    if fc != fa:
+        return f"alternative is on a DIFFERENT feature, {fa} ({where_cfg})"
+    ring = features[fa][1]
+    if cfg_idx in ring and alt_idx in ring:
+        i, j, n = ring.index(cfg_idx), ring.index(alt_idx), len(ring)
+        d = min((i - j) % n, (j - i) % n)
+        return f"same {fa}, {d} vertex/vertices along the ring"
+    return f"same {fa}"
+
+
+def eye_ear(p6: np.ndarray) -> float:
+    """EAR on one eye, from the six points in the schema's per-eye order
+    [corner, upper, upper, corner, lower, lower]. This is the quantity Layer 2
+    consumes, so it is the mapping's real acceptance test."""
+    return float((np.linalg.norm(p6[1] - p6[5]) + np.linalg.norm(p6[2] - p6[4]))
+                 / (2 * max(np.linalg.norm(p6[0] - p6[3]), 1e-9)))
+
+
+def chord_skew(p6: np.ndarray) -> float:
+    """How far the two EAR chords are from perpendicular to the corner axis,
+    as a fraction of eye width. EAR assumes vertical chords: the numerator is
+    read as lid separation, so a chord that leans along the eye picks up eye
+    WIDTH as well as opening. Zero is a pair of vertical chords."""
+    axis = p6[3] - p6[0]
+    w = max(float(np.linalg.norm(axis)), 1e-9)
+    u = axis / w
+    return float((abs(u @ (p6[1] - p6[5])) + abs(u @ (p6[2] - p6[4]))) / (2 * w))
+
+
+def eye_stats(pts24: np.ndarray) -> tuple[float, float]:
+    """Mean EAR and mean chord skew over the two eyes of one face."""
+    eyes = [pts24[0:6], pts24[6:12]]
+    return (float(np.mean([eye_ear(e) for e in eyes])),
+            float(np.mean([chord_skew(e) for e in eyes])))
+
+
+def paired(a: np.ndarray, b: np.ndarray) -> dict:
+    """Paired comparison of two per-face measurements of the same thing. The
+    pairing is what makes a small sample usable: face-to-face variation is
+    common to both and cancels."""
+    d = a - b
+    n = len(d)
+    se = float(d.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+    return {"mean_diff": float(d.mean()), "se": se, "n": n,
+            "ci95": (float(d.mean() - 1.96 * se), float(d.mean() + 1.96 * se)),
+            "b_closer_pct": float(100 * np.mean(b < a))}
+
+
 def synthetic_frames(n: int, seed: int) -> list[tuple[np.ndarray, np.ndarray]]:
     """Schematic faces at varied pose/scale, as (bgr frame, 98 points)."""
     from dms_layer1.data.synthetic import generate_face
@@ -189,10 +288,17 @@ def verify(cfg: dict, schema, det, args, out_dir: Path) -> int:
     meshes, gts, iods = [], [], []
     n_none = n_unmatched = 0
     mesh_size = None
+    # face size as a fraction of the shorter image side, kept per outcome: a
+    # low usable count is a property of the detector, and which faces it
+    # drops decides what population the medians below describe
+    size_found, size_missed = [], []
     for n_img, (frame, pts98) in enumerate(samples, 1):
+        h, w = frame.shape[:2]
+        face_frac = float(square_box_around(pts98, 1.0).side / max(1, min(h, w)))
         mesh = det.mesh(frame)
         if mesh is None:
             n_none += 1
+            size_missed.append(face_frac)
             continue
         mesh_size = mesh.shape[0] if mesh_size is None else mesh_size
         gt24 = pts98[schema.wflw_indices]
@@ -201,6 +307,7 @@ def verify(cfg: dict, schema, det, args, out_dir: Path) -> int:
             continue
         meshes.append(mesh.astype(np.float64))
         gts.append(gt24)
+        size_found.append(face_frac)
         iods.append(np.linalg.norm(gt24[schema.nme_right_index]
                                    - gt24[schema.nme_left_index]))
         if n_img % 100 == 0:
@@ -208,6 +315,12 @@ def verify(cfg: dict, schema, det, args, out_dir: Path) -> int:
 
     say(f"\n  usable faces: {len(meshes)} "
         f"(no face: {n_none}, found a different face: {n_unmatched})")
+    if size_found and size_missed:
+        say(f"  target face size, fraction of the shorter image side: "
+            f"median {np.median(size_found):.3f} where MediaPipe found it, "
+            f"{np.median(size_missed):.3f} where it found nothing. The Tasks "
+            "bundle uses a short-range face detector, so small faces in wide "
+            "web photos drop out; the sample below is the faces it keeps.")
     if mesh_size is None:
         say("FAIL: MediaPipe found no face at all; nothing to measure.")
         return 1
@@ -266,13 +379,17 @@ def verify(cfg: dict, schema, det, args, out_dir: Path) -> int:
     say("\n=== 3. Control: the closest mesh index to each ground truth point ===")
     say("  Over the same faces, every one of the 478 mesh points is scored "
         "against each ground truth point. This is what verifies the CHOICE "
-        "of index rather than just its accuracy.")
+        "of index rather than just its accuracy. Read the relation column "
+        "before acting: a neighbouring vertex on the same ring is the same "
+        "anatomy sampled slightly differently, and moving to it fits WFLW's "
+        "parameterisation rather than fixing a mapping error.")
     # (N, 24, 478) distances, normalised per face, then the median over faces
     d = np.linalg.norm(gt_arr[:, :, None, :] - mesh_arr[:, None, :, :], axis=3)
     d = d / iod_arr[:, None, None] * 100.0
     med_all = np.median(d, axis=0)                            # (24, 478)
     best_idx = med_all.argmin(axis=1)
     best_val = med_all.min(axis=1)
+    features = mesh_features()
     flagged = []
     say(f"  {'ours':>4}  {'name':<22} {'cfg':>4} {'median':>7}   "
         f"{'best':>4} {'median':>7}   gap")
@@ -286,28 +403,109 @@ def verify(cfg: dict, schema, det, args, out_dir: Path) -> int:
             f"{med[p.index]:6.2f}%   {best_idx[p.index]:>4} "
             f"{best_val[p.index]:6.2f}%   {gap:5.2f}{mark}")
 
+    if flagged:
+        say("\n  Each flagged point, with what the alternative index actually "
+            "is and whether the gap survives the sample size:")
+        for pt, bi, bv, gap in flagged:
+            rel = describe_alternative(indices[pt.index], bi, features)
+            st = paired(off[:, pt.index], d[:, pt.index, bi])
+            sig = ("significant" if st["ci95"][0] > 0 else "NOT significant")
+            say(f"    {pt.name} ({pt.group}): {indices[pt.index]} -> {bi}")
+            say(f"      relation: {rel}")
+            say(f"      paired gain {st['mean_diff']:.2f} +- {st['se']:.2f} "
+                f"points of IOD (95% CI {st['ci95'][0]:.2f} to "
+                f"{st['ci95'][1]:.2f}, n={st['n']}), {sig}; the alternative is "
+                f"closer on {st['b_closer_pct']:.0f}% of faces")
+            if pt.group == "eyelids":
+                # what the single swap does to the EAR chords on that eye:
+                # the eyelid indices exist to make those chords vertical, so
+                # a gain in NME that costs chord geometry is not a gain
+                lo = 0 if pt.index < 6 else 6
+                swapped = list(indices)
+                swapped[pt.index] = bi
+                before = float(np.mean([chord_skew(m[indices[lo:lo + 6]])
+                                        for m in mesh_arr]))
+                after = float(np.mean([chord_skew(m[swapped[lo:lo + 6]])
+                                       for m in mesh_arr]))
+                say(f"      EAR chord skew on that eye: {before:.4f} "
+                    f"configured -> {after:.4f} with the swap "
+                    f"({'worse' if after > before else 'better'})")
+
+    # ---- 4: what switching would actually change --------------------------
+    say("\n=== 4. The two mappings compared on what they are used for ===")
+    alt_indices = [int(b) for b in best_idx]
+    picked_alt = mesh_arr[:, alt_indices, :]
+    off_alt = (np.linalg.norm(picked_alt - gt_arr, axis=2)
+               / iod_arr[:, None]) * 100.0
+    nme_cfg, nme_alt = off.mean(axis=1), off_alt.mean(axis=1)
+    st_nme = paired(nme_cfg, nme_alt)
+    say(f"  NME over all 24 points, per face:")
+    say(f"    configured        mean {nme_cfg.mean():6.3f}%  "
+        f"median {np.median(nme_cfg):6.3f}%")
+    say(f"    proximity-optimal mean {nme_alt.mean():6.3f}%  "
+        f"median {np.median(nme_alt):6.3f}%")
+    say(f"    switching every index would move MediaPipe's NME by "
+        f"{-st_nme['mean_diff']:.3f} +- {st_nme['se']:.3f} points "
+        f"(n={st_nme['n']}). That is the largest the mapping choice can "
+        "flatter or hurt either detector.")
+    eye_idx = schema.indices_of_group("eyelids")
+    say(f"    eyelid group only: configured {off[:, eye_idx].mean():.3f}%, "
+        f"proximity-optimal {off_alt[:, eye_idx].mean():.3f}%")
+
+    say("\n  EAR, which is what Layer 2 consumes and the reason the eyelid "
+        "indices are chosen at all:")
+    ear_gt = np.array([eye_stats(g)[0] for g in gt_arr])
+    ear_cfg = np.array([eye_stats(m[indices])[0] for m in mesh_arr])
+    ear_alt = np.array([eye_stats(m[alt_indices])[0] for m in mesh_arr])
+    skew_cfg = float(np.mean([eye_stats(m[indices])[1] for m in mesh_arr]))
+    skew_alt = float(np.mean([eye_stats(m[alt_indices])[1] for m in mesh_arr]))
+    skew_gt = float(np.mean([eye_stats(g)[1] for g in gt_arr]))
+    def agree(e):
+        return float(np.mean(np.abs(e - ear_gt))), float(np.corrcoef(e, ear_gt)[0, 1])
+    a_cfg, r_cfg = agree(ear_cfg)
+    a_alt, r_alt = agree(ear_alt)
+    say(f"    {'mapping':<18} {'mean EAR':>9} {'|EAR - gt|':>11} "
+        f"{'corr with gt':>13} {'chord skew':>11}")
+    say(f"    {'ground truth':<18} {ear_gt.mean():9.4f} {0.0:11.4f} "
+        f"{1.0:13.3f} {skew_gt:11.4f}")
+    say(f"    {'configured':<18} {ear_cfg.mean():9.4f} {a_cfg:11.4f} "
+        f"{r_cfg:13.3f} {skew_cfg:11.4f}")
+    say(f"    {'proximity-optimal':<18} {ear_alt.mean():9.4f} {a_alt:11.4f} "
+        f"{r_alt:13.3f} {skew_alt:11.4f}")
+    say("    chord skew is how far the two EAR chords sit from perpendicular "
+        "to the corner axis, as a fraction of eye width. EAR reads its "
+        "numerator as lid separation, so a skewed chord mixes in eye width.")
+    say("    correlation is the number Layer 2 depends on: its threshold is "
+        "calibrated, so a constant EAR offset is absorbed and a weaker "
+        "relationship with the truth is not.")
+
     # ---- verdict -----------------------------------------------------------
     say("\n=== Verdict ===")
     if failed:
         say(f"  MAPPING FAIL: {len(failed)} point(s) beyond tolerance: "
-            + ", ".join(f"{p.name} ({med[p.index]:.2f}%)" for p in failed))
+            + ", ".join(f"{pt.name} ({med[pt.index]:.2f}%)" for pt in failed))
     else:
         say("  MAPPING OK: every point sits within its group's tolerance of "
             "the ground truth point it claims to be.")
     say(f"  pupils: left {med[12]:.2f}% / right {med[13]:.2f}% of IOD "
         "(the iris-head check; these are the indices that would silently "
         "vanish on a 468-point bundle)")
+    same_ring = [f for f in flagged
+                 if describe_alternative(indices[f[0].index], f[1],
+                                         features).startswith("same ")]
     if flagged:
         say(f"  {len(flagged)} index/indices where another mesh point is more "
-            f"than {BETTER_INDEX_MARGIN_PCT_IOD}% of IOD closer:")
-        for p, bi, bv, gap in flagged:
-            say(f"    {p.name}: configured {indices[p.index]} at "
-                f"{med[p.index]:.2f}%, mesh {bi} at {bv:.2f}% (gap {gap:.2f})")
-        say("  These are a decision to make, not automatically a bug: an index "
-            "chosen for semantics can lose to one chosen by proximity.")
-    else:
-        say(f"  No mesh index beats a configured one by more than "
-            f"{BETTER_INDEX_MARGIN_PCT_IOD}% of IOD.")
+            f"than {BETTER_INDEX_MARGIN_PCT_IOD}% of IOD closer, "
+            f"{len(same_ring)} of them a neighbouring vertex on the same "
+            "feature. Same-feature neighbours are a difference in where along "
+            "the feature each convention samples, not a mapping error, and "
+            "chasing them optimises against WFLW's annotation style.")
+    if not args.synthetic and args.split == "test":
+        say("  NOTE: this ran on the test split. Its per-point table is a "
+            "verification result, but the proximity-optimal indices in "
+            "section 3 are FITTED to this data: adopting them from a test-split "
+            "run is fitting the mapping to the evaluation set. Re-run with "
+            "--split train if you intend to change any index.")
 
     results = {
         "mediapipe_version": mp_pkg.__version__,
@@ -321,12 +519,28 @@ def verify(cfg: dict, schema, det, args, out_dir: Path) -> int:
         "wrong_face": n_unmatched,
         "mesh_points": int(mesh_size),
         "iris_head_present": bool(iris_ok),
+        "face_frac_median_found": float(np.median(size_found)) if size_found else None,
+        "face_frac_median_missed": float(np.median(size_missed)) if size_missed else None,
         "per_point": per_point,
         "better_index_available": [
-            {"name": p.name, "configured": indices[p.index],
-             "configured_median_pct_iod": float(med[p.index]),
-             "best_mesh_index": bi, "best_median_pct_iod": bv, "gap_pct_iod": gap}
-            for p, bi, bv, gap in flagged],
+            {"name": pt.name, "configured": indices[pt.index],
+             "configured_median_pct_iod": float(med[pt.index]),
+             "best_mesh_index": bi, "best_median_pct_iod": bv, "gap_pct_iod": gap,
+             "relation": describe_alternative(indices[pt.index], bi, features),
+             "paired": paired(off[:, pt.index], d[:, pt.index, bi])}
+            for pt, bi, bv, gap in flagged],
+        # the fitted mapping, recorded so a decision to adopt it can be
+        # traced to the run that produced it. Fitted on THIS split.
+        "proximity_optimal_indices": alt_indices,
+        "nme_configured_pct": float(nme_cfg.mean()),
+        "nme_proximity_optimal_pct": float(nme_alt.mean()),
+        "nme_paired": st_nme,
+        "ear": {"gt_mean": float(ear_gt.mean()),
+                "configured": {"mean": float(ear_cfg.mean()), "mae_vs_gt": a_cfg,
+                               "corr_vs_gt": r_cfg, "chord_skew": skew_cfg},
+                "proximity_optimal": {"mean": float(ear_alt.mean()), "mae_vs_gt": a_alt,
+                                      "corr_vs_gt": r_alt, "chord_skew": skew_alt},
+                "gt_chord_skew": skew_gt},
         "verdict": "fail" if failed else "pass",
     }
     with open(out_dir / "mediapipe_mapping.yaml", "w") as f:

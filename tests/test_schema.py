@@ -130,3 +130,30 @@ def test_malformed_schemas_are_rejected():
     bad = yaml.safe_load(yaml.safe_dump(raw))
     bad["points"][0], bad["points"][1] = bad["points"][1], bad["points"][0]
     _expect_schema_error(bad, "entries out of output order")
+
+
+def test_optional_alternative_mediapipe_mapping():
+    """indices_alt is optional, validated the same way as indices, and absent
+    by default: the project ships one mapping, and the second exists only for
+    a sensitivity check."""
+    import tempfile
+
+    import yaml as _yaml
+
+    raw = _yaml.safe_load(SCHEMA_PATH.read_text())
+    assert load_schema(SCHEMA_PATH).mediapipe_indices_alt is None
+
+    good = list(raw["mediapipe"]["indices"])
+    good[2] = 157
+    with tempfile.TemporaryDirectory() as tmp:
+        for alt, ok in ((good, True), (good[:10], False), ([9999] * 24, False)):
+            path = Path(tmp) / "schema.yaml"
+            raw["mediapipe"]["indices_alt"] = alt
+            path.write_text(_yaml.safe_dump(raw))
+            try:
+                loaded = load_schema(path)
+            except SchemaError:
+                assert not ok, "a valid indices_alt was rejected"
+                continue
+            assert ok, "an invalid indices_alt was accepted"
+            assert loaded.mediapipe_indices_alt == tuple(alt)

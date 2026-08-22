@@ -335,3 +335,109 @@ For the ablation this is a note about reproducibility, not about accuracy:
 the comparison runs against whatever MediaPipe ships today, and what it
 ships changed under the project. The report should name the exact version
 and bundle used, which the comparison script now prints and records.
+
+## The mapping question: nine flagged indices, and why the four eyelid ones stay
+
+The mapping verification on the test split (n = 80 usable faces of 300) put
+every point inside tolerance and the pupils at 1.79% of IOD, but its control
+section flagged nine indices where a different mesh vertex sits closer to
+WFLW's ground truth. Four are eyelid points, which is the group the EAR that
+Layer 2 consumes is computed from:
+
+| our point | configured | offset | closest | offset | gap |
+|-----------|-----------|--------|---------|--------|-----|
+| left_eye_upper_inner  | 158 | 5.16% | 157 | 2.90% | 2.26 |
+| left_eye_lower_outer  | 144 | 4.94% | 163 | 1.91% | 3.03 |
+| right_eye_upper_inner | 385 | 5.06% | 384 | 3.26% | 1.80 |
+| right_eye_lower_outer | 373 | 4.70% | 390 | 2.33% | 2.37 |
+
+The worry this raises is legitimate and worth stating in the report: if
+MediaPipe runs on worse eyelid indices than it could, our model wins on the
+group the project is about for a reason that has nothing to do with either
+model.
+
+### What the alternatives are
+
+MediaPipe publishes its mesh topology, so this is answerable exactly rather
+than by inspection. Both eyes are a 16-vertex contour ring. Walking the
+image-left ring from the outer corner:
+
+    33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7
+     0    1    2    3    4    5    6    7    8    9   10   11   12   13   14  15
+
+All four alternatives are on that same ring, exactly one vertex from the
+configured index: 158 to 157 is one step toward the inner corner along the
+upper lid, 144 to 163 one step toward the outer corner along the lower lid,
+and the other eye mirrors both. They are the same anatomy sampled at a
+slightly different point along the lid, not different features. WFLW's six
+eye points sit slightly wider along the lid than MediaPipe's, and that
+difference is what the control is measuring.
+
+### Why moving to them would cost more than it gains
+
+EAR is defined on chords: `(|p1 - p5| + |p2 - p4|) / (2 |p0 - p3|)`. It reads
+the numerator as lid separation, which is only true when each chord is
+perpendicular to the corner-to-corner axis. In ring positions, the configured
+sextet is exactly symmetric about that axis:
+
+| chord | configured | positions | alternative | positions |
+|-------|-----------|-----------|-------------|-----------|
+| p1 to p5 | 160, 144 | 3 and 13, mirrored about 8 | 160, 163 | 3 and 14, off by one |
+| p2 to p4 | 158, 153 | 5 and 11, mirrored about 8 | 157, 153 | 6 and 11, off by one |
+
+Both configured chords are vertical by construction. Each proposed swap tilts
+one of them, so the numerator starts picking up eye width along with eye
+opening. The configured set is the canonical six-point EAR selection for this
+mesh for exactly that reason.
+
+So the two candidate mappings optimise different things. The proximity
+mapping minimises distance to WFLW's annotation convention; the configured
+mapping preserves the geometry the aspect ratio is defined on. Fitting the
+first on the evaluation split would also be fitting the mapping to the test
+set.
+
+### The decision rule adopted
+
+1. The schema mapping stays chosen on semantics and stays fixed. Its offset
+   from WFLW's convention is reported, not minimised.
+2. The alternative is measured rather than argued about.
+   `scripts/verify_mediapipe_mapping.py` now reports, for every flagged
+   index, whether the closer vertex is on the same feature ring and how many
+   vertices away, a paired per-face gain with its standard error, and what
+   the swap does to that eye's EAR chord geometry. Section 4 reports both
+   mappings side by side on the two things they are used for: NME over all
+   24 points, and EAR agreement with ground truth (mean absolute difference,
+   correlation, chord skew).
+3. Any index change must be derived on the TRAIN split. The script says so
+   when it is run on test.
+4. The ablation itself carries the sensitivity check. Setting
+   `mediapipe.indices_alt` in the schema adds a `mediapipe_alt_map` row to
+   `scripts/compare_detectors.py`, scored off the same mesh, and the paired
+   section prints our margin under both mappings. If the sign and the
+   conclusion hold under both, the index choice is not what decided the
+   comparison, and the report can say so with a number.
+
+### Sample size, and what the 80 usable faces are
+
+Of 300 test images, MediaPipe found no face in 178 and a different face in
+42. That is a property of the Tasks bundle's short-range face detector rather
+than a bug: it is built for faces that fill a reasonable part of the frame,
+and WFLW is web photography full of small faces in group shots. The
+verification script now prints the median target-face size for found versus
+missed faces so the population the medians describe is visible.
+
+Two consequences. For the mapping question, the pairing is per face and the
+differences are systematic, so the standard error is small even at n = 80;
+the script prints it rather than leaving it to be assumed. For the ablation,
+MediaPipe's detection rate on full WFLW frames is measuring a short-range
+detector against a long-range dataset, which is worth one sentence in the
+report next to the rate itself.
+
+### Contour
+
+Contour keeps 234, 58, 454, 288. The closer alternatives are interior mesh
+vertices on the cheek, not points on the face oval at all, so they are not
+contour points in any semantic sense. The group exists to give Layer 2 a
+left/right yaw asymmetry rather than a precise measurement, and the offset
+from WFLW's contour parameterisation is a documented number rather than
+something to chase.

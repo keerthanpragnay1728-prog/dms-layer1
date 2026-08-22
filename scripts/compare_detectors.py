@@ -211,6 +211,15 @@ def main() -> int:
         # the landmark model on identical inputs, which is the comparison the
         # project is about. Without it a detector gap reads as a model gap.
         detectors["ours_on_mp_box"] = OurModelOnMediaPipeBox(cfg, ours, mp_det)
+        if SCHEMA.mediapipe_indices_alt is not None:
+            # A second index selection off the same mesh, present only to show
+            # whether the mapping choice, rather than the landmark models,
+            # could decide this table. Its timing is meaningless (it re-runs
+            # MediaPipe's inference) and it is not the project's mapping.
+            detectors["mediapipe_alt_map"] = mp_det.remapped(
+                SCHEMA.mediapipe_indices_alt, "mediapipe_alt_map")
+            say(f"second mapping present in the schema, scoring it too: "
+                f"{list(SCHEMA.mediapipe_indices_alt)}")
 
     results = {n: {} for n in detectors}         # rel -> (nme, pts) for matches
     misses = {n: [] for n in detectors}
@@ -326,6 +335,22 @@ def main() -> int:
                             "ours_win_rate_pct": float(100 * np.mean(a < b))}
             np.save(out_dir / "paired_ours_nme.npy", a)
             np.save(out_dir / "paired_mediapipe_nme.npy", b)
+            if "mediapipe_alt_map" in detectors:
+                alt_joint = [r for r in joint if r in results["mediapipe_alt_map"]]
+                if alt_joint:
+                    a2 = np.array([results["ours"][r][0] for r in alt_joint])
+                    b2 = np.array([results["mediapipe"][r][0] for r in alt_joint])
+                    c2 = np.array([results["mediapipe_alt_map"][r][0]
+                                   for r in alt_joint])
+                    say(f"\n  mapping sensitivity (n={len(alt_joint)}): our "
+                        f"margin over MediaPipe is "
+                        f"{100 * (b2 - a2).mean():+.3f} NME points under the "
+                        f"schema mapping and {100 * (c2 - a2).mean():+.3f} "
+                        "under the second mapping. If the sign and the "
+                        "conclusion hold across both, the index choice is not "
+                        "what decides this comparison.")
+                    paired_stats["margin_schema_mapping"] = float(100 * (b2 - a2).mean())
+                    paired_stats["margin_alt_mapping"] = float(100 * (c2 - a2).mean())
 
     # ---- 4: the calibration price (GT box vs Haar box, our model) ---------
     say("\n=== Our model: ground-truth boxes vs the Haar pipeline ===")

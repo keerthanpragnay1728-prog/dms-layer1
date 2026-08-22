@@ -98,6 +98,10 @@ class MediaPipeLandmarkDetector(LandmarkDetector):
                 "libegl1 libgles2). Kaggle images ship them already.") from e
         print(f"mediapipe: Tasks FaceLandmarker ready, bundle {model_path.name}")
 
+    def remapped(self, indices, name: str) -> "RemappedMediaPipe":
+        """The same mesh read through a different 24-index selection."""
+        return RemappedMediaPipe(self, list(indices), name)
+
     def close(self) -> None:
         """Release the landmarker. Worth calling explicitly: left to the
         garbage collector it is closed during interpreter teardown, by which
@@ -144,3 +148,30 @@ class MediaPipeLandmarkDetector(LandmarkDetector):
         if pts is None:
             return None
         return Landmarks24(points=pts[self.indices].copy(), source=self.name)
+
+
+class RemappedMediaPipe(LandmarkDetector):
+    """MediaPipe's mesh, read through a second index mapping.
+
+    This exists for one question: could the choice of mesh indices, rather
+    than the landmark models, be what decides the comparison? Running the
+    ablation with both mappings answers it with a number instead of an
+    argument. It is not a candidate mapping for the project, and its timing
+    is meaningless (it re-runs the same inference), so report neither.
+    """
+
+    def __init__(self, base: MediaPipeLandmarkDetector, indices: list[int],
+                 name: str = "mediapipe_alt_map"):
+        if len(indices) != len(base.indices):
+            raise ValueError(
+                f"remapped index list has {len(indices)} entries, the schema "
+                f"has {len(base.indices)}")
+        self.base = base
+        self.indices = list(indices)
+        self.name = name
+
+    def detect(self, frame: np.ndarray) -> Landmarks24 | None:
+        mesh = self.base.mesh(frame)
+        if mesh is None:
+            return None
+        return Landmarks24(points=mesh[self.indices].copy(), source=self.name)

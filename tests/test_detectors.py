@@ -155,3 +155,35 @@ def test_checkpoints_record_their_framing_envelope():
         assert "framing [0.90, 1.00]" in line and "val NME" in line
         # a file without the record says so rather than staying silent
         assert "UNRECORDED" in describe_weights(ckpt, {"epoch": 1, "val_nme": None})
+
+
+def test_alternative_mapping_reads_the_same_mesh():
+    """The second mapping must be a different SELECTION off one mesh, not a
+    second model: that is what makes 'would other indices change the verdict'
+    answerable at all."""
+    if importlib.util.find_spec("mediapipe") is None:
+        print("SKIP: mediapipe not installed")
+        return
+    from dms_layer1.detect.mediapipe_detector import (MediaPipeLandmarkDetector,
+                                                      MediaPipeUnavailable)
+    try:
+        det = MediaPipeLandmarkDetector(BASE_CFG, SCHEMA)
+    except MediaPipeUnavailable as e:
+        print(f"SKIP: mediapipe unavailable ({e})")
+        return
+    with det:
+        img, _ = generate_face()
+        mesh = det.mesh(img)
+        alt = list(SCHEMA.mediapipe_indices)
+        alt[2] = 157        # a neighbouring vertex on the same eyelid ring
+        remapped = det.remapped(alt, "alt")
+        out = remapped.detect(img)
+        assert out is not None and out.source == "alt"
+        assert np.allclose(out.points, mesh[alt])
+        assert not np.allclose(out.points, det.detect(img).points)
+        try:
+            det.remapped(alt[:5], "short")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("accepted a wrong-length index list")
