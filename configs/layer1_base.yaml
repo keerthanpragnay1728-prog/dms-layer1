@@ -49,12 +49,14 @@ preprocess:
   num_preview: 16      # crops rendered per split for the eyeball check
   out_dir: /kaggle/working/cache   # where build_crop_cache WRITES
 
-# Where training/evaluation READS the built cache. On Kaggle this is a
-# read-only mount: either a published dataset path, or (as currently used)
-# the committed output of the milestone-2 notebook attached via
-# Add Input -> Notebooks. Locally, point at wherever the cache was built.
+# Where training/evaluation READS the built cache. Kaggle mount paths vary
+# by attachment kind (dataset: /kaggle/input/<slug>/...; notebook output:
+# /kaggle/input/notebooks/<user>/<slug>/cache), so the default 'auto'
+# searches /kaggle/input for the cache files and uses a single unambiguous
+# hit (with a printed note). Set an explicit path to pin it, e.g. locally
+# or when several caches are attached.
 cache:
-  dir: /kaggle/input/notebook1aae8c57db/cache
+  dir: auto
 
 # ----- milestone 3: Haar face detection front-end ----------------------------
 face_detector:
@@ -122,3 +124,16 @@ train:
   checkpoint_dir: /kaggle/working/checkpoints
   metrics_csv: /kaggle/working/metrics.csv
   curves_png: /kaggle/working/curves.png
+
+# ----- milestone 5: test-set evaluation --------------------------------------
+eval:
+  # Same-session default; for a separate eval session attach the training
+  # notebook's output and pass --checkpoint with its mount path (the script
+  # lists every checkpoint it can see under /kaggle/input if the path is
+  # wrong -- it never auto-picks, since several runs may be attached).
+  checkpoint: /kaggle/working/checkpoints/best.pth
+  out_dir: /kaggle/working/m5_eval
+  batch_size: 256
+  failure_threshold: 0.10   # standard "failure at NME > 10%" criterion
+  cpu_timing_iters: 200
+  save_worst: 12            # worst-K faces rendered with pred vs gt

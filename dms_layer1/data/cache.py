@@ -154,12 +154,60 @@ def build_cache(cfg: dict, split: str, out_dir: str | Path | None = None) -> dic
     return manifest
 
 
+# Where Kaggle mounts attached inputs. Mount layouts vary by input kind
+# (dataset: /kaggle/input/<slug>/..., notebook output:
+# /kaggle/input/notebooks/<user>/<slug>/...), which is why discovery exists.
+KAGGLE_INPUT = Path("/kaggle/input")
+
+
+def _has_split_files(cache_dir: Path, split: str) -> bool:
+    return cache_dir.is_dir() and all(
+        (cache_dir / v).is_file() for v in _file_names(split).values())
+
+
+def discover_cache_dirs(split: str, search_root: Path | None = None) -> list[Path]:
+    """Directories under the Kaggle input mount that contain the split's
+    cache files. Depth-limited glob (mounts are shallow; covers both the
+    dataset layout and notebooks/<user>/<slug>/cache)."""
+    search_root = KAGGLE_INPUT if search_root is None else search_root
+    if not search_root.is_dir():
+        return []
+    marker = _file_names(split)["crops"]
+    hits: set[Path] = set()
+    for depth in range(1, 5):
+        pattern = "/".join(["*"] * depth) + f"/{marker}"
+        hits.update(p.parent for p in search_root.glob(pattern))
+    return sorted(h for h in hits if _has_split_files(h, split))
+
+
 def load_cache_from_cfg(cfg: dict, split: str) -> CacheData:
-    """Load the cache from the configured read location (cache.dir). On
-    Kaggle that is a read-only mount: a published dataset or a committed
-    notebook's output attached via Add Input; locally, wherever the build
-    wrote. Build-time code uses preprocess.out_dir instead."""
-    return load_cache(require(cfg, "cache.dir"), split)
+    """Load the cache from cache.dir. Because Kaggle mount paths vary by how
+    the cache is attached, a configured path that does not hold the cache
+    files (or the value 'auto') falls back to discovery under /kaggle/input:
+    exactly one hit is used WITH A LOUD NOTE; zero or several hits raise a
+    clear error listing what was found. Build-time code uses
+    preprocess.out_dir instead."""
+    configured = str(require(cfg, "cache.dir"))
+    if configured != "auto" and _has_split_files(Path(configured), split):
+        return load_cache(configured, split)
+
+    hits = discover_cache_dirs(split)
+    if len(hits) == 1:
+        print(f"NOTE: cache.dir='{configured}' does not hold the {split} cache; "
+              f"discovered it at {hits[0]} and using that. Set cache.dir to "
+              "this path (or leave 'auto') to silence this note.")
+        return load_cache(hits[0], split)
+
+    detail = (f"none under {KAGGLE_INPUT}" if not hits
+              else "several candidates:\n" + "\n".join(f"    {h}" for h in hits))
+    raise CacheError(
+        f"Cannot locate the {split} crop cache.\n"
+        f"  cache.dir: {configured} (missing or lacks the cache files)\n"
+        f"  discovery: {detail}\n"
+        "Attach the cache (dataset or the milestone-2 notebook's output) and "
+        "set cache.dir to its mount path, or leave 'auto' when exactly one "
+        "cache is attached."
+    )
 
 
 def load_cache(cache_dir: str | Path, split: str) -> CacheData:

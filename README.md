@@ -49,10 +49,12 @@ Conventions (documented in the schema file, enforced by tests):
    round-trip (with test). Verified on real WFLW; findings and the pose
    detection problem in [docs/milestone3_notes.md](docs/milestone3_notes.md);
    `scripts/sweep_haar_pose.py` measures the tuning/profile-fallback options.
-4. **(current)** Model, training loop, augmentation (flip-index unit test),
-   checkpointing, epoch-level resume, CSV metrics.
-5. Evaluation: NME overall / per group / per WFLW subset, failure rate @10%,
-   model size, CPU inference time.
+4. **(closed)** Model, training loop, augmentation (flip-index unit test),
+   checkpointing, epoch-level resume, CSV metrics. Baseline (L2) trained on
+   T4: best val NME 7.285% @ epoch 99, 3.3 s/epoch, converged —
+   [docs/milestone4_notes.md](docs/milestone4_notes.md).
+5. **(current)** Evaluation: NME overall / per group / per WFLW subset,
+   failure rate @10%, model size, CPU inference time.
 6. `LandmarkDetector` interface + our implementation + MediaPipe mapped to the
    same 24 semantics.
 7. Frame-to-frame stability harness comparing both detectors (landmark and
@@ -152,6 +154,23 @@ clean stop ahead of Kaggle's session cap. Validation is a seeded 10% split
 of the train cache (WFLW has no subject IDs, so a random face split is the
 only option; the subject-independence concern applies to the later in-cabin
 recordings, not WFLW); early stopping tracks val NME (inter-ocular).
+
+## Milestone 5: evaluation
+
+`notebooks/kaggle_milestone5_eval.ipynb`, or directly:
+
+```bash
+python scripts/evaluate.py --config configs/layer1_base.yaml --checkpoint <path>/best.pth
+```
+
+Reports on the WFLW test split (ground-truth-box crops — the standard
+protocol, so landmark quality is not confounded by the face detector):
+overall NME, NME per landmark group (pupil error matters far more than
+contour error, and the overall average hides it), NME + failure rate per
+WFLW subset, failure rate @ NME > 10%, model size, and CPU per-frame
+inference time (labelled machine-relative). Writes `m5_results.yaml`, the
+per-face NME array (kept for the milestone-6 ablation statistics), a
+worst-12 render (prediction vs ground truth), and the config snapshot.
 
 Local smoke test without the dataset (schematic faces, code-path check only,
 loudly labelled as such): add `--synthetic` to either script.

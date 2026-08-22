@@ -74,3 +74,43 @@ def test_load_missing_cache_fails_clearly():
             assert "build_crop_cache" in str(e)
         else:
             raise AssertionError("expected CacheError for empty cache dir")
+
+
+def test_cache_discovery_and_auto_loading():
+    """Kaggle mounts the cache at paths that vary by attachment kind, so
+    cache.dir='auto' (or a stale path) must discover a single attached cache
+    loudly, and refuse to guess between several."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        root = write_synthetic_dataset(tmp / "ds", ATTRS, num_per_split=4, seed=1)
+        cfg = _cfg(root, tmp / "fake_input" / "notebooks" / "user" / "nb123" / "cache")
+        cachemod.build_cache(cfg, "test")
+
+        hits = cachemod.discover_cache_dirs("test", search_root=tmp / "fake_input")
+        assert hits == [tmp / "fake_input" / "notebooks" / "user" / "nb123" / "cache"]
+        assert cachemod.discover_cache_dirs("train", search_root=tmp / "fake_input") == []
+
+        old_root = cachemod.KAGGLE_INPUT
+        cachemod.KAGGLE_INPUT = tmp / "fake_input"
+        try:
+            for configured in ("auto", str(tmp / "does_not_exist")):
+                cfg["cache"] = {"dir": configured}
+                data = cachemod.load_cache_from_cfg(cfg, "test")
+                assert data.crops.shape[0] == 4
+
+            # a second attached cache makes discovery ambiguous -> clear error
+            cfg2 = _cfg(root, tmp / "fake_input" / "other-cache")
+            cachemod.build_cache(cfg2, "test")
+            cfg["cache"] = {"dir": "auto"}
+            try:
+                cachemod.load_cache_from_cfg(cfg, "test")
+            except cachemod.CacheError as e:
+                assert "several candidates" in str(e)
+            else:
+                raise AssertionError("expected CacheError for ambiguous discovery")
+
+            # an explicit valid path bypasses discovery even when ambiguous
+            cfg["cache"] = {"dir": str(tmp / "fake_input" / "other-cache")}
+            assert cachemod.load_cache_from_cfg(cfg, "test").crops.shape[0] == 4
+        finally:
+            cachemod.KAGGLE_INPUT = old_root
