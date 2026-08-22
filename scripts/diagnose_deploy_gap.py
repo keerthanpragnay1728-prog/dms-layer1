@@ -54,10 +54,12 @@ from dms_layer1.detect.haar import box_iou, haar_to_crop_box
 from dms_layer1.detect.ours import OurLandmarkDetector
 from dms_layer1.evaluation import metrics
 from dms_layer1.landmarks.schema import load_schema
+from dms_layer1.model.io import describe_weights
 
 SCALE_CURVE = [1.0, 1.1, 1.2, 1.3, 1.4, 1.56, 1.7, 1.9]
 GRID_SCALES = [1.12, 1.30, 1.45, 1.60, 1.75]
 GRID_SHIFTS = [0.08, 0.13]
+REFINE_EXPANDS = [1.15, 1.30, 1.45, 1.60]
 _lines: list[str] = []
 
 
@@ -76,6 +78,12 @@ def scaled_box(base: CropBox, k: float, shift_y: float = 0.0) -> CropBox:
     side = base.side * k
     cx = base.x0 + base.side / 2
     cy = base.y0 + base.side / 2 + shift_y * side
+    return CropBox(int(np.floor(cx - side / 2)), int(np.floor(cy - side / 2)),
+                   int(np.ceil(side)))
+
+
+def centred_box(cx: float, cy: float, side: float) -> CropBox:
+    """Square box of a given side centred on a point."""
     return CropBox(int(np.floor(cx - side / 2)), int(np.floor(cy - side / 2)),
                    int(np.ceil(side)))
 
@@ -111,6 +119,10 @@ def main() -> int:
     rng = random.Random(require(cfg, "seed"))
 
     det = OurLandmarkDetector(cfg, weights=args.weights)
+    say("")
+    say(describe_weights(args.weights or require(cfg, "detector.weights"), det.meta))
+    say("  ^ check this line first: a stale weights file reproduces old "
+        "numbers exactly and is otherwise invisible in the output.")
 
     def run_model(gray: np.ndarray, box: CropBox) -> np.ndarray:
         crop = extract_square(gray, box, det.input_size)
@@ -244,22 +256,108 @@ def main() -> int:
             say(f"  {s:>6.2f} {d:>6.2f} {row['containment_pct']:>11.2f}% "
                 f"{nme_stats(vals):>40}")
 
-    # ---- 4. two-stage refinement -------------------------------------------
-    say("\n=== 4. Two-stage refinement (no retraining): stage-1 box from the "
-        "current calibration, stage-2 box rebuilt from stage-1 points ===")
-    s1_vals, s2_vals = [], []
+    # ---- 4. refinement, crossed with the stage-1 calibration ---------------
+    say("\n=== 4. Two-stage refinement crossed with the stage-1 calibration ===")
+    say("  Refinement quality depends on the points it starts from, so the "
+        "stage-1 box and refinement are ONE joint decision, not two.")
+    ceiling = [nme(run_model(grays[r], gt_box[r]), gt24[r]) for r in right_face]
+    say(f"  GT-box ceiling on this population: {nme_stats(ceiling)}")
+    say(f"  {'scale':>6} {'shift':>6} {'stage 1':>10} {'stage 2':>10} {'gain':>8}")
+    refine_rows, best = [], None
+    for sc in GRID_SCALES:
+        for sh in GRID_SHIFTS:
+            s1, s2 = [], []
+            for rel in right_face:
+                box1 = haar_to_crop_box(haar_boxes[rel][0], sc, sh)
+                pred1 = run_model(grays[rel], box1)
+                s1.append(nme(pred1, gt24[rel]))
+                box2 = square_box_around(pred1, det.refine_expand)
+                s2.append(nme(run_model(grays[rel], box2), gt24[rel]))
+            m1, m2 = float(np.mean(s1)), float(np.mean(s2))
+            refine_rows.append({"box_scale": sc, "box_shift_y": sh,
+                                "stage1_nme_pct": round(100 * m1, 3),
+                                "stage2_nme_pct": round(100 * m2, 3)})
+            say(f"  {sc:>6.2f} {sh:>6.2f} {100 * m1:>9.3f}% {100 * m2:>9.3f}% "
+                f"{100 * (m1 - m2):>+7.3f}")
+            if best is None or m2 < best[0]:
+                best = (m2, sc, sh)
+    say(f"  best end-to-end: ({best[1]:.2f}, {best[2]:.2f}) at "
+        f"{100 * best[0]:.3f}%, against the {100 * np.mean(ceiling):.3f}% ceiling")
+
+    say("\n  refine_expand sweep from that stage-1 box (the rebuilt box does "
+        "not have to be the canonical framing; the model's own optimum may "
+        "sit slightly wide of k = 1.0):")
+    exp_rows = []
+    for re_exp in REFINE_EXPANDS:
+        vals = []
+        for rel in right_face:
+            box1 = haar_to_crop_box(haar_boxes[rel][0], best[1], best[2])
+            pred1 = run_model(grays[rel], box1)
+            vals.append(nme(run_model(grays[rel], square_box_around(pred1, re_exp)),
+                            gt24[rel]))
+        exp_rows.append({"refine_expand": re_exp,
+                         "nme_pct": round(100 * float(np.mean(vals)), 3)})
+        mark = "  <- config" if abs(re_exp - det.refine_expand) < 1e-9 else ""
+        say(f"    refine_expand {re_exp:.2f} (k = {re_exp / expand:.2f}): "
+            f"{nme_stats(vals)}{mark}")
+
+    say("\n  a third stage, to check refinement has converged:")
+    best_exp = min(exp_rows, key=lambda r: r["nme_pct"])["refine_expand"]
+    s3 = []
     for rel in right_face:
-        box1 = haar_to_crop_box(haar_boxes[rel][0], det.haar.box_scale,
-                                det.haar.box_shift_y)
-        pred1 = run_model(grays[rel], box1)
-        s1_vals.append(nme(pred1, gt24[rel]))
-        box2 = square_box_around(pred1, expand)
-        s2_vals.append(nme(run_model(grays[rel], box2), gt24[rel]))
-    say(f"  stage 1 (current {det.haar.box_scale}, {det.haar.box_shift_y}): "
-        f"{nme_stats(s1_vals)}")
-    say(f"  stage 2 (refined box):                {nme_stats(s2_vals)}")
-    say(f"  GT-box ceiling on the same population: "
-        f"{nme_stats([nme(run_model(grays[r], gt_box[r]), gt24[r]) for r in right_face])}")
+        pred = run_model(grays[rel], haar_to_crop_box(haar_boxes[rel][0],
+                                                      best[1], best[2]))
+        for _ in range(2):
+            pred = run_model(grays[rel], square_box_around(pred, best_exp))
+        s3.append(nme(pred, gt24[rel]))
+    say(f"    stage 3 at refine_expand {best_exp:.2f}: {nme_stats(s3)}")
+
+    # ---- 5. what is left, decomposed ---------------------------------------
+    say("\n=== 5. The residual, decomposed: scale error vs centre error ===")
+    say("  Face SELECTION is excluded by construction here (right-face images "
+        "only), so the gap to the ceiling is box GEOMETRY: the deploy box has "
+        "both the wrong size and the wrong centre. These four variants "
+        "separate the two.")
+    cal_sc, cal_sh = det.haar.box_scale, det.haar.box_shift_y
+    variants = {"A gt box (ceiling)": [], "B gt centre, deploy size": [],
+                "C deploy centre, gt size": [], "D deploy box (both)": []}
+    realized_k, offsets = [], []
+    for rel in right_face:
+        g = gt_box[rel]
+        d_box = haar_to_crop_box(haar_boxes[rel][0], cal_sc, cal_sh)
+        gcx, gcy = g.x0 + g.side / 2, g.y0 + g.side / 2
+        dcx, dcy = d_box.x0 + d_box.side / 2, d_box.y0 + d_box.side / 2
+        realized_k.append(d_box.side / g.side)
+        offsets.append(np.hypot(dcx - gcx, dcy - gcy) / g.side)
+        variants["A gt box (ceiling)"].append(nme(run_model(grays[rel], g), gt24[rel]))
+        variants["B gt centre, deploy size"].append(
+            nme(run_model(grays[rel], centred_box(gcx, gcy, d_box.side)), gt24[rel]))
+        variants["C deploy centre, gt size"].append(
+            nme(run_model(grays[rel], centred_box(dcx, dcy, g.side)), gt24[rel]))
+        variants["D deploy box (both)"].append(
+            nme(run_model(grays[rel], d_box), gt24[rel]))
+    for label, vals in variants.items():
+        say(f"  {label:<26} {nme_stats(vals)}")
+    a, b, c, d = (float(np.mean(variants[k])) for k in variants)
+    say(f"  cost of size alone   (B - A): {100 * (b - a):+.3f} NME points")
+    say(f"  cost of centre alone (C - A): {100 * (c - a):+.3f} NME points")
+    say(f"  cost of both         (D - A): {100 * (d - a):+.3f} NME points")
+    say(f"  interaction (D - A) - (B - A) - (C - A): "
+        f"{100 * (d - a - (b - a) - (c - a)):+.3f}")
+    say(f"\n  realized framing k at ({cal_sc}, {cal_sh}): "
+        f"median {np.median(realized_k):.2f}  "
+        f"p10 {np.percentile(realized_k, 10):.2f}  "
+        f"p90 {np.percentile(realized_k, 90):.2f}")
+    say(f"  centre offset / face side: median {np.median(offsets):.3f}  "
+        f"p90 {np.percentile(offsets, 90):.3f}")
+    dv = np.array(variants["D deploy box (both)"])
+    for name, arr, edges in (("realized k", np.array(realized_k), [0, 1.1, 1.3, 1.5, 9]),
+                             ("centre offset", np.array(offsets), [0, 0.05, 0.1, 0.2, 9])):
+        say(f"  deploy NME binned by {name}:")
+        for lo, hi in zip(edges[:-1], edges[1:]):
+            m = (arr >= lo) & (arr < hi)
+            if m.sum():
+                say(f"    {lo:.2f} to {hi:.2f}: {100 * dv[m].mean():6.3f}%  (n={m.sum()})")
 
     results = {
         "n_images": len(images),
@@ -271,10 +369,12 @@ def main() -> int:
         if single else None,
         "gt_box_live_path_nme_pct_mean": round(100 * float(np.mean(gtb_nme)), 3),
         "calibration_grid": grid_rows,
-        "two_stage": {"stage1_nme_pct_mean": round(100 * float(np.mean(s1_vals)), 3)
-                      if s1_vals else None,
-                      "stage2_nme_pct_mean": round(100 * float(np.mean(s2_vals)), 3)
-                      if s2_vals else None},
+        "refinement_grid": refine_rows,
+        "refine_expand_sweep": exp_rows,
+        "best_end_to_end": {"box_scale": best[1], "box_shift_y": best[2],
+                            "nme_pct": round(100 * best[0], 3)},
+        "residual_decomposition": {k: round(100 * float(np.mean(v)), 3)
+                                   for k, v in variants.items()},
     }
     with open(out_dir / "m6_diagnosis.yaml", "w") as f:
         yaml.safe_dump(results, f, sort_keys=False)

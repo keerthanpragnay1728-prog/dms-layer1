@@ -60,6 +60,8 @@ class Trainer:
         cache_expand = float(cache.manifest.get("crop_expand", 1.0))
         reference = float(require(cfg, "preprocess.reference_expand"))
         self.base_frac = reference / cache_expand
+        self._cache_expand = cache_expand
+        self._reference = reference
         n = len(cache.crops)
         val_fraction = float(require(cfg, "train.val_fraction"))
         perm = np.random.default_rng(self.seed).permutation(n)
@@ -86,6 +88,17 @@ class Trainer:
                 "(scripts/build_crop_cache.py), or narrow train.augment.framing. "
                 "Set train.augment.allow_padding: true only to reproduce an old run."
             )
+        # Provenance stamped into every checkpoint: which framing envelope
+        # these weights were trained for. Milestone 6 produced two models
+        # whose numbers differ by 13 points at deploy framing and are
+        # otherwise indistinguishable from the file, so the file says.
+        self.train_meta = {
+            "framing": [aug.framing_lo, aug.framing_hi],
+            "reference_expand": reference,
+            "cache_expand": cache_expand,
+            "loss": str(require(cfg, "train.loss")),
+            "seed": self.seed,
+        }
         self.train_ds = CachedFaceDataset(
             cache.crops, cache.landmarks, train_idx, input_size, mean, std,
             augment=aug, flip_perm=self.schema.flip_permutation,
@@ -149,6 +162,7 @@ class Trainer:
         return {
             "epoch": epoch,                      # last COMPLETED epoch
             "arch": self.model.arch,             # so weights load config-free
+            "train_meta": self.train_meta,       # and framing-provenance-aware
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),

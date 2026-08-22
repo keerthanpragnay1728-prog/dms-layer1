@@ -35,6 +35,27 @@ def _arch_of(cfg: dict) -> dict:
             "input_size": int(require(cfg, "model.input_size"))}
 
 
+def _meta_of(ck: dict) -> dict:
+    return {"epoch": ck.get("trained_epoch", ck.get("epoch")),
+            "val_nme": ck.get("val_nme", ck.get("best_nme")),
+            "train_meta": ck.get("train_meta")}
+
+
+def describe_weights(path, meta: dict) -> str:
+    """One line naming exactly which weights are in play. Printed by every
+    script that loads a model: milestone 6 wasted a run on stale uploaded
+    weights that were indistinguishable from the new ones in the output."""
+    tm = meta.get("train_meta") or {}
+    framing = (f"framing [{tm['framing'][0]:.2f}, {tm['framing'][1]:.2f}]"
+               if tm.get("framing") else
+               "framing UNRECORDED (trained before framing was tracked, so "
+               "assume the narrow [0.87, 1.18] envelope)")
+    val = f"{meta['val_nme']:.3f}%" if meta.get("val_nme") is not None else "n/a"
+    return (f"weights: {path}\n"
+            f"         trained epoch {meta.get('epoch')}, val NME {val}, "
+            f"loss {tm.get('loss', 'n/a')}, {framing}")
+
+
 def load_weights(model: LandmarkNet, path: str | Path, cfg: dict,
                  device: torch.device | str = "cpu") -> dict:
     """Load a training checkpoint or an exported weights file into `model`.
@@ -50,8 +71,7 @@ def load_weights(model: LandmarkNet, path: str | Path, cfg: dict,
             "Point --config at the config the weights were trained with."
         )
     model.load_state_dict(ck["model"])
-    return {"epoch": ck.get("trained_epoch", ck.get("epoch")),
-            "val_nme": ck.get("val_nme", ck.get("best_nme"))}
+    return _meta_of(ck)
 
 
 def load_model(path: str | Path, cfg: dict,
@@ -85,13 +105,9 @@ def load_model(path: str | Path, cfg: dict,
                 "with (its config_used.yaml sits next to the checkpoint). "
                 f"Original error: {first}"
             ) from e
-        meta = {"epoch": ck.get("trained_epoch", ck.get("epoch")),
-                "val_nme": ck.get("val_nme", ck.get("best_nme"))}
-        return model.to(device), meta
+        return model.to(device), _meta_of(ck)
     model.load_state_dict(ck["model"])
-    meta = {"epoch": ck.get("trained_epoch", ck.get("epoch")),
-            "val_nme": ck.get("val_nme", ck.get("best_nme"))}
-    return model.to(device), meta
+    return model.to(device), _meta_of(ck)
 
 
 def resolve_weights(path_or_auto: str | Path) -> Path:
@@ -140,6 +156,7 @@ def export_weights(checkpoint_path: str | Path, cfg: dict,
         "arch": model.arch,
         "trained_epoch": meta["epoch"],
         "val_nme": meta["val_nme"],
+        "train_meta": meta.get("train_meta"),
         "source_checkpoint": checkpoint_path.name,
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)

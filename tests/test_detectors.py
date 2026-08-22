@@ -83,3 +83,53 @@ def test_mediapipe_detector_on_schematic():
     # contour is the known approximation; just keep it in the neighbourhood
     assert off[20:24].max() < 0.30
     assert det.detect(np.zeros((240, 240, 3), dtype=np.uint8)) is None
+
+
+def test_two_stage_refinement_runs_and_changes_the_answer():
+    """Refinement must be a real second pass: same interface, same output
+    contract, different (rebuilt-box) prediction."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        cache_dir = _build_test_cache(Path(tmp))
+        cfg = _cfg(cache_dir, tmp / "run", epochs=3)
+        Trainer(cfg).train()
+        merged = {**BASE_CFG, "model": cfg["model"], "train": BASE_CFG["train"]}
+        ckpt = str(tmp / "run" / "ckpt" / "best.pth")
+
+        one = {**merged, "detector": {**BASE_CFG["detector"], "refine_stages": 1}}
+        two = {**merged, "detector": {**BASE_CFG["detector"], "refine_stages": 2}}
+        img, _ = generate_face()
+        a = OurLandmarkDetector(one, weights=ckpt).detect(img)
+        b = OurLandmarkDetector(two, weights=ckpt).detect(img)
+        assert a is not None and b is not None
+        assert b.points.shape == (24, 2) and b.source == "ours"
+        assert not np.allclose(a.points, b.points), "second stage changed nothing"
+
+        bad = {**merged, "detector": {**BASE_CFG["detector"], "refine_stages": 0}}
+        try:
+            OurLandmarkDetector(bad, weights=ckpt)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError for refine_stages < 1")
+
+
+def test_checkpoints_record_their_framing_envelope():
+    """The stale-weights guard: a checkpoint says what framing it was trained
+    for, so an old upload cannot masquerade as a fresh run."""
+    from dms_layer1.model.io import describe_weights, load_model
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        cache_dir = _build_test_cache(Path(tmp))
+        cfg = _cfg(cache_dir, tmp / "run", epochs=1)
+        cfg["train"]["augment"]["framing"] = [0.9, 1.0]
+        Trainer(cfg).train()
+        ckpt = tmp / "run" / "ckpt" / "best.pth"
+        _, meta = load_model(ckpt, cfg)
+        assert meta["train_meta"]["framing"] == [0.9, 1.0]
+        assert meta["train_meta"]["loss"] == "wing"
+        line = describe_weights(ckpt, meta)
+        assert "framing [0.90, 1.00]" in line and "val NME" in line
+        # a file without the record says so rather than staying silent
+        assert "UNRECORDED" in describe_weights(ckpt, {"epoch": 1, "val_nme": None})

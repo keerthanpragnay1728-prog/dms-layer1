@@ -111,13 +111,86 @@ splits, against 167 MB before, and the canonical region stays at 132 px
 against 128 px before, so k = 1.0 numbers remain comparable across the
 rebuild.
 
+## Results after the framing-aware retrain
+
+Scale response, old model against the framing-aware one, on the same faces:
+
+| k    | 1.00   | 1.10   | 1.20   | 1.30    | 1.40    | 1.56    | 1.70    | 1.90    |
+|------|-------:|-------:|-------:|--------:|--------:|--------:|--------:|--------:|
+| old  | 6.714% | 7.949% | 9.862% | 12.933% | 16.616% | 24.814% | 33.428% | 47.248% |
+| new  | 8.598% | 8.480% | 8.851% |  9.370% | 10.112% | 11.825% | 14.131% | 19.380% |
+
+The cliff is gone. The new model gives up 1.9 points at canonical framing
+and gains 13 at deploy framing, crossing over just past k = 1.1. Its own
+minimum sits at about k = 1.1 rather than 1.0, which is the training
+distribution's mean (framing [0.85, 1.60], mean 1.22) pulling the sweet spot
+wide. Re-centring the augmentation range on the realized deploy framing is
+an available further experiment, not a recommendation yet.
+
+Calibration grid, end NME, old against new:
+
+| box_scale | old     | new     |
+|-----------|--------:|--------:|
+| 1.12      | 13.288% | 13.957% |
+| 1.30      | 14.894% | 13.528% |
+| 1.45      | 18.285% | 13.982% |
+| 1.60      | 22.876% | 14.674% |
+| 1.75      | 28.997% | 16.324% |
+
+Peak accuracy is essentially tied (old 12.745% at 1.12/0.13, new 13.099% at
+the same point). The difference is the shape: the new model is flat from
+1.12 to 1.45 within 0.5 points, where the old one fell 15 points across the
+same span.
+
+**Decisions.** Adopt the framing-aware model, not because it wins on peak
+accuracy (it does not) but because it removes the sensitivity to a
+calibration this project has already got wrong once on a proxy. Set the
+calibration to 1.30 / 0.13, the centre of the flat region rather than its
+edge, so per-face variation in the Haar-to-face ratio moves along the flat
+part instead of off a cliff. Adopt two-stage refinement, which now pays:
+16.324% to 12.599% against a 7.768% ceiling, where on the old model it moved
+28.997% to 25.216% and was not a fix.
+
+Refinement and the stage-1 calibration are one joint decision, since the
+rebuilt box is only as good as the points that build it, and the earlier
+table measured refinement only from the 1.75 box. The diagnostic now crosses
+the full calibration grid with refinement, sweeps the rebuilt box's own
+framing (which need not be canonical, given the k = 1.1 optimum), and checks
+a third stage for convergence.
+
+## The remaining gap, and what it is not
+
+Best end to end is about 12.6% against a 7.768% ceiling on the same faces.
+That residual is not face selection: sections 3 and 4 run only on images
+where the largest box already hits the target, so selection is excluded by
+construction. It is box geometry, and the diagnostic now decomposes it into
+the two ways a deploy box differs from the canonical one, by evaluating four
+variants on the same faces: the ground truth box, the ground truth centre
+with the deploy size, the deploy centre with the ground truth size, and the
+deploy box. Size cost and centre cost are then separable, with the realized
+framing and centre offset distributions printed beside them.
+
+Face selection is a separate and now larger loss, unchanged at 27.67% on
+single-face images and not yet diagnosed.
+
+## Guard added after a wasted run
+
+A diagnostic run auto-loaded stale uploaded weights and reproduced the old
+numbers exactly, which is indistinguishable from a real result in the
+output. Checkpoints and exports now record the framing envelope, loss and
+seed they were trained with, and every script that loads a model prints that
+line before anything else. Weights trained before this record say
+"framing UNRECORDED" rather than staying silent.
+
 ## Sequence from here
 
-1. Rebuild the cache (crop_expand 2.2, cache_size 224).
-2. Retrain with framing [0.85, 1.60]. The cost at k = 1.0 is measured by
-   re-running the milestone-5 protocol and comparing against 7.346%.
+1. Rebuild the cache (crop_expand 2.2, cache_size 224). Done.
+2. Retrain with framing [0.85, 1.60]. Done; results above.
 3. Re-run the deploy gap diagnostic and choose the calibration on end NME.
+   Done: 1.30 / 0.13 adopted, with refinement on. The re-run of the extended
+   sections 4 and 5 confirms the joint calibration-plus-refinement choice
+   and prices the residual.
 4. Run the selection diagnostic and choose a selection rule, and if the
    settings grid says so, revisit the cascade settings under the
-   one-box-per-frame objective.
+   one-box-per-frame objective. This is now the largest open loss.
 5. Only then re-run `compare_detectors.py`, once, on a fixed path.

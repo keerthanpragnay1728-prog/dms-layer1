@@ -72,36 +72,36 @@ face_detector:
   # resolved from this repo's assets/ (vendored copy), cv2.data as fallback
   haar_cascade: haarcascade_frontalface_default.xml
   # Operating point adopted from the pose sweep (scripts/sweep_haar_pose.py,
-  # decision recorded in docs/milestone3_notes.md): vs the old (1.10, 5)
-  # it lifts pose detection 17.8% -> 33.7% and no-flag 79.8% -> 86.8% at
-  # ~157 ms/image, costing unmatched boxes (1.80 -> 5.00 per image --
-  # acceptable: deployment takes the largest box, and WFLW's extra boxes are
-  # largely unannotated faces).
+  # decision recorded in docs/milestone3_notes.md): vs the old (1.10, 5) it
+  # lifts pose detection 17.8% -> 33.7% and no-flag 79.8% -> 86.8% at about
+  # 157 ms/image, costing unmatched boxes (1.80 -> 5.00 per image). That cost
+  # is now known to hurt face SELECTION, which is why the rule below exists;
+  # scripts/diagnose_face_selection.py re-scores these settings for the
+  # one-box-per-frame objective deployment actually has.
   scale_factor: 1.05   # detectMultiScale pyramid step
   min_neighbors: 2
   min_size_frac: 0.08  # min face side as a fraction of min(image h, w)
   equalize_hist: true  # histogram-equalise before detection
-  # Calibration from a raw Haar box to the model's crop box (the same kind
-  # of box the cache was built with): side = max(w, h) * box_scale, centre
-  # shifted down by box_shift_y * side. Adopted from the containment grid
-  # search on real WFLW: 99.73% landmark containment, vs 98.47% for
-  # (1.45, 0.13) and 82.81% for the median fit (docs/milestone3_notes.md).
-  # Cost flag: the bigger box means less face per pixel at deploy time --
-  # quantified in the docs; milestone 6 measures the NME gap GT-box vs
-  # Haar-box before any counter-measure is taken.
-  box_scale: 1.75
-  box_shift_y: 0.08
+  # Calibration from a raw Haar box to the model's crop box: side =
+  # max(w, h) * box_scale, centre shifted down by box_shift_y * side. Chosen
+  # on END NME against the framing-aware model, not on containment (which
+  # inverts; see docs/milestone6_findings.md). That model is flat from 1.12
+  # to 1.45 within 0.5 NME points, so 1.30 is the CENTRE of the flat region
+  # rather than its edge: per-face variation in the Haar-to-face ratio then
+  # moves along the flat part instead of off a cliff.
+  box_scale: 1.30
+  box_shift_y: 0.13
   match_iou: 0.30      # Haar box <-> annotated face matching threshold
   # Which detection to track when the cascade returns several. Milestone 6
   # found 'largest' picks the subject on only 27.67% of single-face WFLW
-  # images at the loosened settings, because loose settings emit oversized
-  # spurious boxes. scripts/diagnose_face_selection.py measures the rules.
+  # images at these settings, because loose settings emit oversized spurious
+  # boxes. scripts/diagnose_face_selection.py measures the rules.
   selection: largest   # largest | confidence | central | largest_sane | confidence_sane
   max_size_frac: 0.90  # *_sane rules drop boxes wider than this fraction of
                        # the shorter image side (a face is not the whole frame)
   # Profile-face fallback for turned heads: when the frontal cascade finds
-  # nothing, run the profile cascade on the image and its mirror. OFF until
-  # scripts/sweep_haar_pose.py shows what it buys and what it costs.
+  # nothing, run the profile cascade on the image and its mirror. Off: the
+  # milestone-3 sweep showed tuning beats it and it roughly triples latency.
   profile_fallback: false
   profile_cascade: haarcascade_profileface.xml
 
@@ -150,9 +150,20 @@ train:
 
 # ----- milestone 6: the two swappable landmark detectors ---------------------
 detector:
+  # Refinement stages: 1 disables refinement; 2 predicts from the calibrated
+  # Haar box, rebuilds a canonical box from those points, and predicts again.
+  # Milestone 6 measured refinement as near worthless from a bad stage-1 box
+  # (29.0 -> 25.2 against a 7.8 ceiling) and worth 3.7 points once the model
+  # tolerates the framing (16.3 -> 12.6). Which stage-1 calibration pairs
+  # best with it is measured by diagnose_deploy_gap.py section 4.
+  refine_stages: 2
+  refine_expand: 1.30  # framing of the rebuilt box, in the same units as
+                       # preprocess.reference_expand
   # Weights for OUR detector: an exported landmarks24*.pt (preferred) or a
   # training checkpoint. 'auto' searches /kaggle/input and uses a single
   # unambiguous hit; several hits raise with the list, never a silent pick.
+  # Every script prints the weights identity and the framing envelope they
+  # were trained for, so a stale upload cannot masquerade as a fresh run.
   weights: auto
   mediapipe:
     min_detection_confidence: 0.5
