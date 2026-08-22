@@ -252,34 +252,10 @@ def main() -> int:
 
 
 def _synthetic_pipeline(cfg: dict) -> dict:
-    """Smoke path: synthetic dataset -> cache -> short training -> cfg
-    pointed at the artefacts. Loudly not a real evaluation."""
-    import tempfile
-    from dms_layer1.data.cache import build_cache
-    from dms_layer1.data.synthetic import write_synthetic_dataset
-    from dms_layer1.train.loop import Trainer
-
-    print("=" * 70)
-    print("SYNTHETIC MODE: schematic faces + a briefly trained model.")
-    print("Code smoke test only - numbers are meaningless.")
-    print("=" * 70)
-    tmp = Path(tempfile.mkdtemp(prefix="m5_synth_"))
-    root = write_synthetic_dataset(tmp / "ds", require(cfg, "dataset.attribute_names"),
-                                   seed=require(cfg, "seed"))
-    cfg["dataset"]["root"] = str(root)
-    cfg["preprocess"]["out_dir"] = str(tmp / "cache")
-    for split in ("train", "test"):
-        build_cache(cfg, split)
-    cfg["cache"]["dir"] = str(tmp / "cache")
-    cfg["model"]["width"] = 8
-    cfg["train"].update({"epochs": 6, "batch_size": 8, "num_workers": 0,
-                         "stop_after_epochs": None, "resume": False,
-                         "checkpoint_dir": str(tmp / "ckpt"),
-                         "metrics_csv": str(tmp / "metrics.csv"),
-                         "curves_png": str(tmp / "curves.png")})
-    Trainer(cfg).train()
-    cfg["eval"]["checkpoint"] = str(tmp / "ckpt" / "best.pth")
-    cfg["eval"]["out_dir"] = str(tmp / "eval")
+    from dms_layer1.data.synthetic import synthetic_trained_setup
+    cfg, ckpt = synthetic_trained_setup(cfg)
+    cfg["eval"]["checkpoint"] = str(ckpt)
+    cfg["eval"]["out_dir"] = str(ckpt.parent.parent / "eval")
     return cfg
 
 

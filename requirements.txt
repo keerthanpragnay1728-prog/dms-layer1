@@ -16,8 +16,10 @@ matplotlib
 # weights, own dataset pipeline) and stays out until something requires it.
 torch
 
-# milestone 6+ (MediaPipe side of the ablation). Pinned below 1.0: the 1.0
-# release removed the legacy solutions API (FaceMesh) this project uses,
-# and the 0.10 wheels bundle their models inside the package, so runs need
-# no runtime model downloads. Kaggle ships 0.10.x.
-mediapipe>=0.10,<1
+# milestone 6+ (MediaPipe side of the ablation). Pinned EXACTLY: the legacy
+# solutions API (FaceMesh) was removed in 0.10.30, not in 1.0 as the release
+# numbering suggests, and 0.10.21 is the last published version that has it
+# (verified by inspecting the wheels: 0.10.21 ships solutions/face_mesh,
+# 0.10.30/0.10.32/0.10.33/0.10.35 do not, and PyPI has nothing in between).
+# 0.10.21 bundles its models inside the wheel, so runs need no downloads.
+mediapipe==0.10.21

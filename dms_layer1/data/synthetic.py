@@ -138,6 +138,38 @@ def annotation_line(pts: np.ndarray, attributes: dict[str, int],
     return f"{xy} {rect} {attrs} {rel_path}"
 
 
+def synthetic_trained_setup(cfg: dict, epochs: int = 6) -> tuple[dict, Path]:
+    """Shared smoke-test scaffolding for scripts that need a model: build a
+    schematic dataset and cache, train a tiny model briefly, and point the
+    config at the artefacts. Returns (cfg, checkpoint_path). Loudly not a
+    real experiment; numbers from it are meaningless."""
+    import tempfile
+    from dms_layer1.config import require
+    from dms_layer1.data.cache import build_cache
+    from dms_layer1.train.loop import Trainer
+
+    print("=" * 70)
+    print("SYNTHETIC MODE: schematic faces + a briefly trained model.")
+    print("Code smoke test only; numbers are meaningless.")
+    print("=" * 70)
+    tmp = Path(tempfile.mkdtemp(prefix="synth_run_"))
+    root = write_synthetic_dataset(tmp / "ds", require(cfg, "dataset.attribute_names"),
+                                   seed=require(cfg, "seed"))
+    cfg["dataset"]["root"] = str(root)
+    cfg["preprocess"]["out_dir"] = str(tmp / "cache")
+    for split in ("train", "test"):
+        build_cache(cfg, split)
+    cfg["cache"] = {"dir": str(tmp / "cache")}
+    cfg["model"]["width"] = 8
+    cfg["train"].update({"epochs": epochs, "batch_size": 8, "num_workers": 0,
+                         "stop_after_epochs": None, "resume": False,
+                         "checkpoint_dir": str(tmp / "ckpt"),
+                         "metrics_csv": str(tmp / "metrics.csv"),
+                         "curves_png": str(tmp / "curves.png")})
+    Trainer(cfg).train()
+    return cfg, tmp / "ckpt" / "best.pth"
+
+
 def write_synthetic_dataset(root: str | Path, attribute_names: list[str],
                             num_per_split: int = 12, seed: int = 0) -> Path:
     """Create a directory tree that mirrors the real WFLW layout (images dir,

@@ -130,8 +130,9 @@ mapping-verification overlays for MediaPipe (checked by eye before the
 mapping is trusted), then reports detection rates, NME on matched and on
 jointly matched faces, a per-point cross-detector offset table, the
 GT-box versus Haar-box price for our model, same-machine timing, and
-footprints. mediapipe is pinned below 1.0: the 1.0 release removed the
-solutions API, and the 0.10 wheels bundle their models in the package.
+footprints. mediapipe is pinned to exactly 0.10.21, the last published
+version with the solutions API (removed in 0.10.30, well before the 1.0
+numbering suggests); its wheel bundles the models in the package.
 
 Most scripts also take `--synthetic`, which runs them on generated
 schematic faces. That exists so the code paths can be exercised on a

@@ -366,12 +366,18 @@ def main() -> int:
         "+ cascade XML 0.93 MB")
     try:
         import mediapipe as mp_pkg
-        mp_dir = Path(mp_pkg.__file__).parent / "modules"
-        files = sorted(mp_dir.glob("face_*/*.tflite")) + sorted(
-            mp_dir.glob("face_*/*.binarypb"))
+        mp_root = Path(mp_pkg.__file__).parent
+        files = sorted(set(list(mp_root.rglob("face*.tflite"))
+                           + list(mp_root.rglob("face*.binarypb"))
+                           + list(mp_root.rglob("iris*.tflite"))))
         total = sum(f.stat().st_size for f in files) / 1e6
-        say(f"  mediapipe face modules: {total:.2f} MB across {len(files)} "
-            "bundled model files (approximate; the package carries more)")
+        if files:
+            say(f"  mediapipe face/iris models: {total:.2f} MB across "
+                f"{len(files)} bundled files (approximate; the package "
+                "carries more)")
+        else:
+            say("  mediapipe footprint: no face model files found in the "
+                "installed package (wrong version?)")
     except Exception:
         say("  mediapipe footprint: package not inspectable here")
 
@@ -392,33 +398,9 @@ def main() -> int:
 
 
 def _synthetic_pipeline(cfg: dict) -> dict:
-    """Smoke path: schematic dataset, a briefly trained model, and the
-    detector pointed at its checkpoint. Loudly not a real comparison."""
-    import tempfile
-    from dms_layer1.data.cache import build_cache
-    from dms_layer1.data.synthetic import write_synthetic_dataset
-    from dms_layer1.train.loop import Trainer
-
-    print("=" * 70)
-    print("SYNTHETIC MODE: schematic faces + a briefly trained model.")
-    print("Code smoke test only; numbers are meaningless.")
-    print("=" * 70)
-    tmp = Path(tempfile.mkdtemp(prefix="m6_synth_"))
-    root = write_synthetic_dataset(tmp / "ds", require(cfg, "dataset.attribute_names"),
-                                   seed=require(cfg, "seed"))
-    cfg["dataset"]["root"] = str(root)
-    cfg["preprocess"]["out_dir"] = str(tmp / "cache")
-    for split in ("train", "test"):
-        build_cache(cfg, split)
-    cfg["cache"] = {"dir": str(tmp / "cache")}
-    cfg["model"]["width"] = 8
-    cfg["train"].update({"epochs": 6, "batch_size": 8, "num_workers": 0,
-                         "stop_after_epochs": None, "resume": False,
-                         "checkpoint_dir": str(tmp / "ckpt"),
-                         "metrics_csv": str(tmp / "metrics.csv"),
-                         "curves_png": str(tmp / "curves.png")})
-    Trainer(cfg).train()
-    cfg["detector"]["weights"] = str(tmp / "ckpt" / "best.pth")
+    from dms_layer1.data.synthetic import synthetic_trained_setup
+    cfg, ckpt = synthetic_trained_setup(cfg)
+    cfg["detector"]["weights"] = str(ckpt)
     return cfg
 
 

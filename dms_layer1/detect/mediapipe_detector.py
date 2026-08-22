@@ -7,10 +7,11 @@ detectors emit identical semantics, which is what makes the ablation a
 comparison of landmark sources and not of output formats.
 
 mediapipe is imported lazily so the rest of the package works without it
-installed. The project pins mediapipe below 1.0: the 1.0 release removed
-the legacy solutions API this wrapper uses (the same fate as OpenCV 5 and
-the Haar API), and the 0.10 wheels bundle their models inside the package,
-which keeps runs free of runtime downloads.
+installed. The project pins mediapipe==0.10.21 exactly: the legacy
+solutions API this wrapper uses was removed in 0.10.30 (verified by
+inspecting the published wheels; 0.10.21 is the last version that ships
+it), the same fate as OpenCV 5 and the Haar API. The 0.10.21 wheel bundles
+its models inside the package, which keeps runs free of runtime downloads.
 """
 
 from __future__ import annotations
@@ -46,7 +47,8 @@ class MediaPipeLandmarkDetector(LandmarkDetector):
         if not hasattr(mp, "solutions"):
             raise MediaPipeUnavailable(
                 f"mediapipe {mp.__version__} has no solutions API (removed in "
-                "1.0). Install 'mediapipe>=0.10,<1'."
+                "0.10.30; 0.10.21 is the last version that ships it). "
+                "Install 'mediapipe==0.10.21'."
             )
         self.mesh = mp.solutions.face_mesh.FaceMesh(
             static_image_mode=True,
