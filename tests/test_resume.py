@@ -34,6 +34,7 @@ def _cfg(cache_dir: Path, run_dir: Path, epochs: int, resume: bool = False,
         "seed": 11,
         "landmark_schema": "landmarks_24.yaml",
         "cache": {"dir": str(cache_dir)},
+        "preprocess": {"reference_expand": 1.3},
         "model": {"input_size": 64, "num_points": 24, "width": 8},
         "train": {
             "batch_size": 8, "num_workers": 0, "val_fraction": 0.25,
@@ -42,7 +43,7 @@ def _cfg(cache_dir: Path, run_dir: Path, epochs: int, resume: bool = False,
             "schedule": "cosine", "epochs": epochs,
             "early_stopping_patience": 1000,
             "loss": "wing", "wing": {"w": 10.0, "epsilon": 2.0},
-            "augment": {"rotation_deg": 10, "scale": [0.9, 1.1],
+            "augment": {"rotation_deg": 10, "framing": [0.9, 1.0],
                         "translate_frac": 0.04, "brightness": 20,
                         "contrast": 0.15, "blur_prob": 0.2, "flip_prob": 0.5},
             "resume": resume, "stop_after_epochs": stop_after,
@@ -129,3 +130,24 @@ def test_resume_without_checkpoint_fails_clearly():
             assert "resume" in str(e)
         else:
             raise AssertionError("expected FileNotFoundError for resume without checkpoint")
+
+
+def test_trainer_refuses_framing_the_cache_cannot_support():
+    """The milestone-6 lesson as a guard: a framing range wider than the
+    cached context would train on zero padding where deployment shows real
+    background, so the trainer must refuse and say how to fix it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        cache_dir = _build_test_cache(tmp)          # built at crop_expand 1.3
+        cfg = _cfg(cache_dir, tmp / "run", epochs=1)
+        cfg["train"]["augment"]["framing"] = [0.85, 1.60]
+        try:
+            Trainer(cfg)
+        except ValueError as e:
+            assert "crop_expand" in str(e) and "build_crop_cache" in str(e)
+        else:
+            raise AssertionError("expected a refusal for unsupported framing")
+
+        # the same range is allowed once the cache holds enough context
+        cfg["preprocess"]["reference_expand"] = 1.3 / 2.0
+        Trainer(cfg)

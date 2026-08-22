@@ -195,7 +195,7 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     schema = load_schema(resolve_path(cfg, require(cfg, "landmark_schema")))
     det = HaarFaceDetector(cfg)
-    expand = float(require(cfg, "preprocess.crop_expand"))
+    expand = float(require(cfg, "preprocess.reference_expand"))
     input_size = int(require(cfg, "model.input_size"))
     match_iou = float(require(cfg, "face_detector.match_iou"))
     rng = random.Random(require(cfg, "seed"))

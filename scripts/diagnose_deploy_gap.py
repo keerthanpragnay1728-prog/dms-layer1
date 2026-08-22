@@ -106,7 +106,7 @@ def main() -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     schema = load_schema(resolve_path(cfg, require(cfg, "landmark_schema")))
-    expand = float(require(cfg, "preprocess.crop_expand"))
+    expand = float(require(cfg, "preprocess.reference_expand"))
     match_iou = float(require(cfg, "face_detector.match_iou"))
     rng = random.Random(require(cfg, "seed"))
 
@@ -205,10 +205,14 @@ def main() -> int:
     gtb_nme = [nme(run_model(grays[r], gt_box[r]), gt24[r]) for r in sample]
     say(f"  GT-box framing through the LIVE path: {nme_stats(gtb_nme)}")
     say("  (must sit near the milestone-5 7.346%; it did in your run: 6.816%)")
-    s_lo, s_hi = (float(v) for v in require(cfg, "train.augment.scale"))
-    say(f"  training covered framing factors k in "
-        f"[{1 / s_hi:.2f}, {1 / s_lo:.2f}] relative to the GT box "
-        "(augmentation zooms the fixed cache crop)")
+    a = require(cfg, "train.augment")
+    if "framing" in a:
+        k_lo, k_hi = float(a["framing"][0]), float(a["framing"][1])
+    else:
+        k_lo, k_hi = 1.0 / float(a["scale"][1]), 1.0 / float(a["scale"][0])
+    say(f"  the CONFIGURED training envelope is k in [{k_lo:.2f}, {k_hi:.2f}]; "
+        "the checkpoint under test was trained with whatever its own "
+        "config_used.yaml says, so read the curve, not the config")
     say(f"  {'k':>6} {'NME':>26}")
     for k in SCALE_CURVE:
         vals = [nme(run_model(grays[r], scaled_box(gt_box[r], k)), gt24[r])

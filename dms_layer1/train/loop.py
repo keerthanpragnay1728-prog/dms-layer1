@@ -54,6 +54,12 @@ class Trainer:
 
         self.schema = load_schema(resolve_path(cfg, require(cfg, "landmark_schema")))
         cache = load_cache_from_cfg(cfg, "train")
+        # Framing geometry: the cache stores crop_expand of context, the
+        # model's canonical framing is reference_expand. base_frac converts
+        # a framing factor into a fraction of the cached crop.
+        cache_expand = float(cache.manifest.get("crop_expand", 1.0))
+        reference = float(require(cfg, "preprocess.reference_expand"))
+        self.base_frac = reference / cache_expand
         n = len(cache.crops)
         val_fraction = float(require(cfg, "train.val_fraction"))
         perm = np.random.default_rng(self.seed).permutation(n)
@@ -63,12 +69,30 @@ class Trainer:
         input_size = int(require(cfg, "model.input_size"))
         mean = float(require(cfg, "train.pixel_mean"))
         std = float(require(cfg, "train.pixel_std"))
+        aug = AugmentParams.from_cfg(cfg, self.base_frac)
+        allow_padding = bool(require(cfg, "train.augment").get("allow_padding", False))
+        if aug.max_region_frac > 1.0 + 1e-6 and not allow_padding:
+            needed = aug.framing_hi * reference
+            raise ValueError(
+                "The attached cache does not hold enough context for the "
+                "configured framing augmentation.\n"
+                f"  framing range      : [{aug.framing_lo:.2f}, {aug.framing_hi:.2f}] "
+                f"(relative to reference_expand {reference})\n"
+                f"  cache crop_expand  : {cache_expand} (from the cache manifest)\n"
+                f"  widest sample needs: {100 * aug.max_region_frac:.0f}% of the "
+                "cached crop, so it would be padded with zeros where deployment "
+                "shows real background.\n"
+                f"Rebuild the cache with preprocess.crop_expand >= {needed:.2f} "
+                "(scripts/build_crop_cache.py), or narrow train.augment.framing. "
+                "Set train.augment.allow_padding: true only to reproduce an old run."
+            )
         self.train_ds = CachedFaceDataset(
             cache.crops, cache.landmarks, train_idx, input_size, mean, std,
-            augment=AugmentParams.from_cfg(cfg),
-            flip_perm=self.schema.flip_permutation, base_seed=self.seed)
+            augment=aug, flip_perm=self.schema.flip_permutation,
+            base_seed=self.seed, base_frac=self.base_frac)
         self.val_ds = CachedFaceDataset(
-            cache.crops, cache.landmarks, val_idx, input_size, mean, std)
+            cache.crops, cache.landmarks, val_idx, input_size, mean, std,
+            base_frac=self.base_frac)
 
         self.batch_size = int(require(cfg, "train.batch_size"))
         self.num_workers = int(require(cfg, "train.num_workers"))
@@ -114,6 +138,10 @@ class Trainer:
               f"({sum(p.numel() for p in self.model.parameters()):,} params)  "
               f"train={len(train_idx)} val={len(val_idx)}  "
               f"start_epoch={self.start_epoch}")
+        print(f"framing: cache_expand={cache_expand} reference={reference} "
+              f"base_frac={self.base_frac:.3f}  k in "
+              f"[{aug.framing_lo:.2f}, {aug.framing_hi:.2f}]  "
+              f"(widest sample uses {100 * aug.max_region_frac:.0f}% of the cached crop)")
 
     # ---- checkpointing ----------------------------------------------------
 

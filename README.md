@@ -60,7 +60,10 @@ Conventions, all enforced by tests:
    the reading of the numbers are in
    [docs/milestone5_results.md](docs/milestone5_results.md).
 6. In progress. The `LandmarkDetector` interface with two implementations,
-   ours and MediaPipe mapped to the same 24 points.
+   ours and MediaPipe mapped to the same 24 points. The first full-frame run
+   exposed a framing problem and two proxy inversions in earlier decisions;
+   the diagnosis and the fix sequence are in
+   [docs/milestone6_findings.md](docs/milestone6_findings.md).
 7. Planned. The frame to frame stability harness comparing both.
 
 ## Running things

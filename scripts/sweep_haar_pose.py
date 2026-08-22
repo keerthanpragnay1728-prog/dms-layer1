@@ -132,7 +132,7 @@ def main() -> int:
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    expand = float(require(cfg, "preprocess.crop_expand"))
+    expand = float(require(cfg, "preprocess.reference_expand"))
     match_iou = float(require(cfg, "face_detector.match_iou"))
     rng = random.Random(require(cfg, "seed"))
 

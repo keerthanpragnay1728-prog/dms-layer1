@@ -41,11 +41,20 @@ visualize:
 
 # ----- milestone 2: crop cache (one-time preprocess; see data/cache.py) -----
 preprocess:
-  cache_size: 128      # cached grayscale crop resolution (uint8, HxW)
-  crop_expand: 1.30    # square crop side = 1.3 x the 98-point extent
-                       # (~15% context margin each side; train-time scale/
-                       # translation augmentation bridges the gap to Haar
-                       # boxes, which milestone 3 will quantify)
+  # Two different jobs, kept separate since the milestone-6 framing finding:
+  #   reference_expand is the CANONICAL framing (k = 1.0). It defines what
+  #     the model treats as a normally framed face, what the milestone-5
+  #     protocol evaluates, and what the Haar calibration is measured
+  #     against. Do not change it: every recorded number assumes 1.3.
+  #   crop_expand is how much CONTEXT the cache stores around that box, so
+  #     framing augmentation has real image to zoom out into instead of
+  #     zero padding. It must cover max(train.augment.framing) *
+  #     reference_expand; the trainer refuses to run if it does not.
+  reference_expand: 1.30
+  crop_expand: 2.20    # 2.2 = 1.3 x 1.69, covers framing up to k = 1.69
+  cache_size: 224      # keeps the canonical region at 224 * 1.3/2.2 = 132 px,
+                       # comparable to the 128 px of the milestone-2 cache so
+                       # the k = 1.0 numbers stay comparable across rebuilds
   num_preview: 16      # crops rendered per split for the eyeball check
   out_dir: /kaggle/working/cache   # where build_crop_cache WRITES
 
@@ -83,6 +92,13 @@ face_detector:
   box_scale: 1.75
   box_shift_y: 0.08
   match_iou: 0.30      # Haar box <-> annotated face matching threshold
+  # Which detection to track when the cascade returns several. Milestone 6
+  # found 'largest' picks the subject on only 27.67% of single-face WFLW
+  # images at the loosened settings, because loose settings emit oversized
+  # spurious boxes. scripts/diagnose_face_selection.py measures the rules.
+  selection: largest   # largest | confidence | central | largest_sane | confidence_sane
+  max_size_frac: 0.90  # *_sane rules drop boxes wider than this fraction of
+                       # the shorter image side (a face is not the whole frame)
   # Profile-face fallback for turned heads: when the frontal cascade finds
   # nothing, run the profile cascade on the image and its mirror. OFF until
   # scripts/sweep_haar_pose.py shows what it buys and what it costs.
@@ -112,7 +128,14 @@ train:
   wing: {w: 10.0, epsilon: 2.0}   # in pixels of the model input
   augment:
     rotation_deg: 15
-    scale: [0.85, 1.15]
+    # Framing factor k relative to preprocess.reference_expand: k = 1.0 is
+    # the canonical box, k = 1.6 is a box 60% wider around the same face.
+    # The old scale: [0.85, 1.15] covered only k in [0.87, 1.18], and
+    # milestone 6 measured deploy framing at about 1.56 with NME growing
+    # roughly linearly outside the trained range (6.7% at k = 1.0 to 24.8%
+    # at k = 1.56). This range covers the deploy envelope and leaves the
+    # calibration free to move without another retrain.
+    framing: [0.85, 1.60]
     translate_frac: 0.05   # of the model input size
     brightness: 30         # +- gray levels
     contrast: 0.2          # alpha in [0.8, 1.2]

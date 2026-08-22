@@ -332,7 +332,7 @@ def main() -> int:
 
     # ---- 4: the calibration price (GT box vs Haar box, our model) ---------
     say("\n=== Our model: ground-truth boxes vs the Haar pipeline ===")
-    expand = float(require(cfg, "preprocess.crop_expand"))
+    expand = float(require(cfg, "preprocess.reference_expand"))
     gt_nmes = []
     for rel in results["ours"]:
         rec = targets[rel]

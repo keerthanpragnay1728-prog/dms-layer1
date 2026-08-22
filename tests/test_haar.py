@@ -96,3 +96,42 @@ def test_detects_rendered_synthetic_faces():
                           (gt.x0, gt.y0, gt.x0 + gt.side, gt.y0 + gt.side))
             hits += iou > 0.2
     assert hits >= 6, f"cascade found only {hits}/12 schematic faces"
+
+
+def _fb(x, y, side, score=0.0):
+    from dms_layer1.detect.haar import FaceBox
+    return FaceBox(x, y, side, side, "frontal", score)
+
+
+def test_selection_rules_pick_the_intended_box():
+    from dms_layer1.detect.haar import sane_boxes, select_face
+    shape = (400, 400)
+    face = _fb(170, 170, 60, score=9.0)          # small, central, confident
+    spurious = _fb(0, 0, 320, score=1.0)         # big, off-centre, weak
+    boxes = [face, spurious]
+    assert select_face(boxes, "largest", shape) is spurious
+    assert select_face(boxes, "confidence", shape) is face
+    assert select_face(boxes, "central", shape) is face
+    # size sanity drops the oversized box, so 'largest' then finds the face
+    assert select_face(boxes, "largest_sane", shape, max_size_frac=0.5) is face
+    assert select_face(boxes, "confidence_sane", shape, max_size_frac=0.5) is face
+    assert len(sane_boxes(boxes, shape, 0.5)) == 1
+    assert select_face([], "largest", shape) is None
+    # a rule that filters everything out returns None rather than guessing
+    assert select_face([spurious], "largest_sane", shape, max_size_frac=0.1) is None
+    try:
+        select_face(boxes, "biggest", shape)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for an unknown rule")
+
+
+def test_detector_scores_are_populated():
+    """detectMultiScale3 level weights make the 'confidence' rule possible;
+    without them every score is 0 and confidence degenerates to largest."""
+    det = HaarFaceDetector(CFG)
+    img, _ = generate_face()
+    boxes = det.detect(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
+    assert boxes, "cascade found nothing on a schematic face"
+    assert any(b.score != 0.0 for b in boxes)

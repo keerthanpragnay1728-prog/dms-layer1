@@ -1,5 +1,17 @@
 # Milestone 3 notes: the Haar front end on WFLW
 
+> **Correction (milestone 6).** Two decisions recorded below were made on
+> proxy objectives that turned out to invert against the real one. The
+> calibration was chosen by landmark containment, and containment runs
+> OPPOSITE to end accuracy: the 1.75 box that scores 100% containment is
+> the worst box for NME. The detector settings were chosen by any-box
+> matching, which cannot see spurious detections, while deployment picks
+> one box per frame. Both corrections are recorded in
+> [milestone6_findings.md](milestone6_findings.md) and marked in place
+> below. Numbers in this file are correct as measured; it is the decisions
+> drawn from them that needed revisiting.
+
+
 Date: 2026-08-21. Dataset: WFLW test split. Detector:
 `haarcascade_frontalface_default` (vendored in assets/), histogram
 equalisation on. The detector parameters were re-decided by the pose sweep
@@ -7,7 +19,11 @@ below; the shipped operating point is scale_factor 1.05, min_neighbors 2,
 min_size_frac 0.08. The first table was measured at the original settings
 (1.10, 5, 0.08) and is kept as the sweep's baseline.
 
-## Detection rate at the original settings (1.10, 5, 0.08), IoU >= 0.3
+## Any-box detection rate at the original settings (1.10, 5, 0.08), IoU >= 0.3
+
+This asks whether ANY returned box matches each annotated face. It is
+the right question for measuring cascade coverage and the wrong one for
+deployment, which picks a single box per frame (see the correction).
 
 | population   | rate    |
 |--------------|--------:|
@@ -31,14 +47,26 @@ Median fit of raw Haar boxes to the model crop box: box_scale 1.121 (IQR
 containment in the Haar derived crop: 98.47% with the config values
 (1.45, 0.10) against 84.34% with the measured medians (1.12, 0.13).
 
-We kept box_scale 1.45. A landmark outside the crop is a landmark the model
-cannot predict, so containment matters more than crop tightness, and a
-median fit box loses the tails of the distribution. As a consequence,
-`verify_haar_pipeline.py` recommends calibrations by a containment
-maximising grid search rather than a median fit, and prints a candidate
-table.
+We kept box_scale 1.45, reasoning that a landmark outside the crop is a
+landmark the model cannot predict, so containment matters more than crop
+tightness. **That reasoning was wrong, and milestone 6 measured it.**
+Containment only says the answer is inside the picture; it says nothing
+about whether the model can read a picture framed that way. Measured end to
+end on the same faces:
 
-## Final: detection at the shipped settings (1.05, 2, 0.08)
+| box_scale | containment | NME     |
+|-----------|------------:|--------:|
+| 1.12      | 81.68%      | 13.288% |
+| 1.45      | 98.47%      | 18.285% |
+| 1.75      | 100.00%     | 28.997% |
+
+Best containment, worst accuracy, monotonically. The containment maximising
+grid search that `verify_haar_pipeline.py` gained after this decision
+optimises the wrong thing; the calibration is now chosen on end NME by
+`scripts/diagnose_deploy_gap.py` section 3, after the model has been
+retrained to tolerate the framing range.
+
+## Final: any-box detection at the shipped settings (1.05, 2, 0.08)
 
 Verifier re-run at commit `dcbe062`, clone provenance confirmed. Every
 subset improved and pose nearly doubled:
@@ -54,9 +82,14 @@ subset improved and pose nearly doubled:
 | occlusion    | 46.60%             | 60.73%            |
 | blur         | 51.62%             | 65.46%            |
 
-Unmatched boxes went from 1.81 to 5.21 per image (11,029 total). We accept
-that: deployment takes the largest box in a one face cabin, and most of the
-extra boxes in WFLW are unannotated faces. The coordinate round trip stayed
+Unmatched boxes went from 1.81 to 5.21 per image (11,029 total). This was
+accepted on the grounds that deployment takes the largest box in a one face
+cabin and most of the extra boxes in WFLW are unannotated faces. **The
+first half of that is the second correction:** more boxes per frame is
+exactly what makes the largest-box rule fail, and milestone 6 measured the
+largest box being the annotated subject on only 27.67% of single-face
+images. Selection rules and the settings that suit them are measured by
+`scripts/diagnose_face_selection.py`. The coordinate round trip stayed
 exact at 0.000000000 px. The integer readout quantisation bound moved from
 0.79 to 0.95 frame px as the median crop side grew from 177 to 213 px with
 the bigger calibrated box; the model regresses continuous coordinates, so
@@ -77,15 +110,26 @@ Verifier re-run at (1.05, 2, 0.08):
 | (1.12, 0.13) measured medians | 82.81%      |
 | (1.75, 0.08) grid best        | 99.73%      |
 
-Adopted: (1.75, 0.08), by the same containment argument as before. The grid
-best converts a 1.5% landmark loss rate into 0.27%. On the larger matched
-population of the final re-run it held 99.33%, and the grid optimum landed
-at (1.75, 0.07) with the same 99.33%, so the shipped values sit at the
-optimum. The (1.45, 0.13) candidate dropped to 96.61% on that population,
-which supports the decision: the faces the looser detector newly finds are
-exactly the ones a tight box loses landmarks on.
+Adopted at the time: (1.75, 0.08), by the same containment argument as
+before, converting a 1.5% landmark loss rate into 0.27%. **Superseded.**
+1.75 is the worst of the candidates on end NME (28.997% against 13.288% at
+1.12), because it frames the face at about 1.56 times the framing the model
+was trained on, and milestone 6 measured NME growing roughly linearly with
+framing outside the trained range. The number to select on is NME.
 
-Flagged cost: less face per pixel at deploy time. The deploy crop is 1.75
+For the record, the containment story was internally consistent to the end,
+which is what made it convincing. On the larger matched population of the
+final re-run, 1.75 held 99.33%, the containment grid optimum landed at
+(1.75, 0.07) with the same 99.33%, and the tighter (1.45, 0.13) candidate
+fell to 96.61%, which read at the time as confirmation that the faces a
+looser detector newly finds are exactly the ones a tight box loses
+landmarks on. Every one of those statements is still true. They were just
+answering a question that does not determine accuracy.
+
+Flagged cost, which milestone 6 confirmed and then some. This was recorded
+as a cost to be priced later; it was in fact the dominant error term, worth
+about 22 NME points, and pricing it earlier would have caught the
+containment inversion at the time. The mechanism as flagged: The deploy crop is 1.75
 times the Haar side. The ground truth crop that training uses measures
 about 1.12 times the Haar side at the median, so the deploy crop is about
 1.56 times wider than the training crop. The face spans about 77% of a

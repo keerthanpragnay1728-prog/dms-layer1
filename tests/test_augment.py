@@ -21,9 +21,10 @@ from dms_layer1.train.data import AugmentParams, augment_face, eval_transform
 SCHEMA = load_schema(REPO / "configs" / "landmarks_24.yaml")
 
 
-def _no_op(flip_prob=0.0) -> AugmentParams:
-    return AugmentParams(rotation_deg=0, scale_lo=1, scale_hi=1, translate_frac=0,
-                         brightness=0, contrast=0, blur_prob=0, flip_prob=flip_prob)
+def _no_op(flip_prob=0.0, base_frac=1.0) -> AugmentParams:
+    return AugmentParams(framing_lo=1.0, framing_hi=1.0, base_frac=base_frac,
+                         rotation_deg=0, translate_frac=0, brightness=0,
+                         contrast=0, blur_prob=0, flip_prob=flip_prob)
 
 
 def _face_crop() -> tuple[np.ndarray, np.ndarray]:
@@ -86,9 +87,9 @@ def test_affine_moves_image_and_labels_together():
     lm01[18] = (0.62, 0.41)                       # nose_tip, off-centre
     x, y = (lm01[18] * 128).round().astype(int)
     crop[y, x] = 255
-    aug = AugmentParams(rotation_deg=20, scale_lo=0.9, scale_hi=1.1,
-                        translate_frac=0.05, brightness=0, contrast=0,
-                        blur_prob=0, flip_prob=0)
+    aug = AugmentParams(framing_lo=0.9, framing_hi=1.1, base_frac=1.0,
+                        rotation_deg=20, translate_frac=0.05, brightness=0,
+                        contrast=0, blur_prob=0, flip_prob=0)
     for seed in range(5):
         rng = np.random.default_rng(seed)
         out, lm = augment_face(crop, lm01, rng, aug, 112, SCHEMA.flip_permutation)
@@ -100,9 +101,9 @@ def test_affine_moves_image_and_labels_together():
 
 def test_same_seed_same_output():
     crop, lm01 = _face_crop()
-    aug = AugmentParams(rotation_deg=15, scale_lo=0.85, scale_hi=1.15,
-                        translate_frac=0.05, brightness=30, contrast=0.2,
-                        blur_prob=0.5, flip_prob=0.5)
+    aug = AugmentParams(framing_lo=0.85, framing_hi=1.15, base_frac=1.0,
+                        rotation_deg=15, translate_frac=0.05, brightness=30,
+                        contrast=0.2, blur_prob=0.5, flip_prob=0.5)
     a_img, a_lm = augment_face(crop, lm01, np.random.default_rng((7, 3, 11)),
                                aug, 112, SCHEMA.flip_permutation)
     b_img, b_lm = augment_face(crop, lm01, np.random.default_rng((7, 3, 11)),
@@ -111,3 +112,60 @@ def test_same_seed_same_output():
     c_img, _ = augment_face(crop, lm01, np.random.default_rng((7, 4, 11)),
                             aug, 112, SCHEMA.flip_permutation)
     assert not np.array_equal(a_img, c_img)       # epoch changes the draw
+
+
+def test_framing_factor_changes_apparent_face_size():
+    """k is the framing factor: k = 1.0 is the canonical box, larger k is a
+    wider box around the same face, so the face covers LESS of the output
+    and the landmark spread shrinks proportionally."""
+    crop, lm01 = _face_crop()
+    spreads = {}
+    for k in (1.0, 1.3, 1.6):
+        aug = AugmentParams(framing_lo=k, framing_hi=k, base_frac=1.0,
+                            rotation_deg=0, translate_frac=0, brightness=0,
+                            contrast=0, blur_prob=0, flip_prob=0)
+        _, lm = augment_face(crop, lm01, np.random.default_rng(0), aug, 112,
+                             SCHEMA.flip_permutation)
+        spreads[k] = float(lm[:, 0].max() - lm[:, 0].min())
+    assert spreads[1.0] > spreads[1.3] > spreads[1.6]
+    # the shrink is the inverse of k, within interpolation tolerance
+    assert abs(spreads[1.3] * 1.3 - spreads[1.0]) < 0.02
+    assert abs(spreads[1.6] * 1.6 - spreads[1.0]) < 0.02
+    # and points stay centred on the same face
+    for k in (1.3, 1.6):
+        aug = AugmentParams(framing_lo=k, framing_hi=k, base_frac=1.0,
+                            rotation_deg=0, translate_frac=0, brightness=0,
+                            contrast=0, blur_prob=0, flip_prob=0)
+        _, lm = augment_face(crop, lm01, np.random.default_rng(0), aug, 112,
+                             SCHEMA.flip_permutation)
+        assert abs(lm.mean(axis=0)[0] - 0.5) < 0.05
+
+
+def test_base_frac_cuts_the_canonical_region():
+    """With a context-rich cache (base_frac < 1), framing k = 1.0 must
+    reproduce the canonical framing: the same face size as a cache stored at
+    the reference framing."""
+    crop, lm01 = _face_crop()                       # 128px at reference framing
+    wide = cv2.copyMakeBorder(crop, 32, 32, 32, 32, cv2.BORDER_CONSTANT, value=0)
+    lm_wide = (lm01.astype(np.float64) * 128 + 32) / 192   # same face, 1.5x context
+    aug_ref = _no_op()
+    aug_wide = _no_op(base_frac=128 / 192)
+    _, lm_a = augment_face(crop, lm01, np.random.default_rng(0), aug_ref, 112,
+                           SCHEMA.flip_permutation)
+    _, lm_b = augment_face(wide, lm_wide, np.random.default_rng(0), aug_wide, 112,
+                           SCHEMA.flip_permutation)
+    assert np.abs(lm_a - lm_b).max() < 0.01
+    # the deterministic eval path agrees with augmentation at k = 1.0
+    _, lm_c = eval_transform(wide, lm_wide, 112, 128 / 192)
+    assert np.abs(lm_a - lm_c).max() < 0.01
+
+
+def test_from_cfg_reads_framing_and_legacy_scale():
+    base = {"rotation_deg": 15, "translate_frac": 0.05, "brightness": 30,
+            "contrast": 0.2, "blur_prob": 0.15, "flip_prob": 0.5}
+    a = AugmentParams.from_cfg({"train": {"augment": {**base, "framing": [0.85, 1.6]}}}, 0.59)
+    assert (a.framing_lo, a.framing_hi) == (0.85, 1.6)
+    assert abs(a.max_region_frac - 1.6 * 0.59) < 1e-9
+    # legacy zoom factors are the reciprocal of the framing factors
+    b = AugmentParams.from_cfg({"train": {"augment": {**base, "scale": [0.85, 1.15]}}}, 1.0)
+    assert abs(b.framing_lo - 1 / 1.15) < 1e-9 and abs(b.framing_hi - 1 / 0.85) < 1e-9

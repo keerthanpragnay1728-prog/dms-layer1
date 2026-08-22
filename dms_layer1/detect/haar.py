@@ -59,6 +59,7 @@ class FaceBox:
     w: int
     h: int
     source: str = "frontal"
+    score: float = 0.0          # cascade level weight, higher is stronger
 
     @property
     def center(self) -> tuple[float, float]:
@@ -117,6 +118,40 @@ def calibrate_haar_to_crop(gt_boxes: list[CropBox],
             "box_shift_x": q(shifts_x), "box_shift_y": q(shifts_y)}
 
 
+SELECTION_RULES = ("largest", "confidence", "central",
+                   "largest_sane", "confidence_sane")
+
+
+def sane_boxes(boxes: list[FaceBox], image_shape, max_size_frac: float
+               ) -> list[FaceBox]:
+    """Drop boxes too large to be a face in this frame. Haar at loose
+    settings emits oversized boxes on background texture; deployment would
+    also see them from a headrest or a window frame."""
+    limit = max_size_frac * min(image_shape[:2])
+    return [b for b in boxes if max(b.w, b.h) <= limit]
+
+
+def select_face(boxes: list[FaceBox], rule: str, image_shape,
+                max_size_frac: float = 0.9) -> FaceBox | None:
+    """Pick the one face to track from a frame's detections. Milestone 6
+    showed this choice matters as much as the cascade settings: 'largest'
+    is only right when the biggest box IS the subject."""
+    if rule not in SELECTION_RULES:
+        raise ValueError(f"Unknown selection rule '{rule}'; "
+                         f"expected one of {SELECTION_RULES}")
+    pool = boxes
+    if rule.endswith("_sane"):
+        pool = sane_boxes(boxes, image_shape, max_size_frac) or []
+    if not pool:
+        return None
+    if rule in ("largest", "largest_sane"):
+        return max(pool, key=lambda b: (b.area, b.score))
+    if rule in ("confidence", "confidence_sane"):
+        return max(pool, key=lambda b: (b.score, b.area))
+    cy, cx = image_shape[0] / 2.0, image_shape[1] / 2.0
+    return min(pool, key=lambda b: (b.center[0] - cx) ** 2 + (b.center[1] - cy) ** 2)
+
+
 class HaarFaceDetector:
     """OpenCV Haar cascade wrapper configured entirely from the YAML config."""
 
@@ -131,6 +166,11 @@ class HaarFaceDetector:
         # Optional profile-face fallback for turned heads: runs only when the
         # frontal cascade finds nothing. The stock profile cascade detects
         # LEFT-facing profiles, so a mirrored second pass covers right-facing.
+        self.selection = str(require(cfg, "face_detector.selection"))
+        self.max_size_frac = float(require(cfg, "face_detector.max_size_frac"))
+        if self.selection not in SELECTION_RULES:
+            raise ValueError(f"face_detector.selection '{self.selection}' "
+                             f"must be one of {SELECTION_RULES}")
         self.profile_fallback = bool(require(cfg, "face_detector.profile_fallback"))
         self.profile_cascade = (
             _load_cascade(require(cfg, "face_detector.profile_cascade"))
@@ -138,11 +178,24 @@ class HaarFaceDetector:
 
     def _run(self, cascade, img: np.ndarray, min_side: int,
              source: str) -> list[FaceBox]:
-        found = cascade.detectMultiScale(
-            img, scaleFactor=self.scale_factor, minNeighbors=self.min_neighbors,
-            minSize=(min_side, min_side))
-        return [FaceBox(int(x), int(y), int(w), int(h), source)
-                for x, y, w, h in found]
+        """detectMultiScale3 also returns per-box level weights, which are
+        the closest thing a cascade has to a confidence. Falls back to the
+        plain call (all scores 0) if the build lacks it."""
+        try:
+            found, _levels, weights = cascade.detectMultiScale3(
+                img, scaleFactor=self.scale_factor,
+                minNeighbors=self.min_neighbors, minSize=(min_side, min_side),
+                outputRejectLevels=True)
+            scores = [float(w) for w in np.asarray(weights).reshape(-1)]
+        except (cv2.error, AttributeError):
+            found = cascade.detectMultiScale(
+                img, scaleFactor=self.scale_factor,
+                minNeighbors=self.min_neighbors, minSize=(min_side, min_side))
+            scores = [0.0] * len(found)
+        if len(scores) != len(found):
+            scores = [0.0] * len(found)
+        return [FaceBox(int(x), int(y), int(w), int(h), source, sc)
+                for (x, y, w, h), sc in zip(found, scores)]
 
     def detect(self, gray: np.ndarray) -> list[FaceBox]:
         """All detected faces, largest first. Input must be grayscale. With
@@ -165,10 +218,15 @@ class HaarFaceDetector:
         """The model crop box for the largest detected face, or None. This is
         the front half of the deployment pipeline: frame -> Haar -> crop box;
         crops.extract_square / to_frame_space complete it."""
-        boxes = self.detect(gray)
-        if not boxes:
+        box = self.select(gray)
+        if box is None:
             return None
-        return haar_to_crop_box(boxes[0], self.box_scale, self.box_shift_y)
+        return haar_to_crop_box(box, self.box_scale, self.box_shift_y)
+
+    def select(self, gray: np.ndarray) -> FaceBox | None:
+        """The single face this frame is about, per face_detector.selection."""
+        return select_face(self.detect(gray), self.selection, gray.shape,
+                           self.max_size_frac)
 
 
 def gt_crop_box(landmarks98: np.ndarray, expand: float) -> CropBox:

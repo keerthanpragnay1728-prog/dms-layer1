@@ -76,10 +76,13 @@ def resolve_checkpoint(path_str: str) -> Path:
 
 
 def predict_all(model, crops: np.ndarray, landmarks: np.ndarray,
-                cfg: dict, device: torch.device) -> np.ndarray:
-    """Deterministic eval transform + batched forward. Returns (N, 24, 2)
-    predictions in [0, 1] crop space. The input size comes from the model's
-    own arch record, so checkpoints of any size evaluate correctly."""
+                cfg: dict, device: torch.device,
+                base_frac: float = 1.0) -> np.ndarray:
+    """Deterministic eval transform + batched forward at framing k = 1.0.
+    Returns (N, 24, 2) predictions in [0, 1] of the CANONICAL crop (the same
+    space the returned ground truth is converted to). The input size comes
+    from the model's own arch record, so checkpoints of any size evaluate
+    correctly."""
     input_size = model.arch["input_size"]
     mean = float(require(cfg, "train.pixel_mean"))
     std = float(require(cfg, "train.pixel_std"))
@@ -88,7 +91,7 @@ def predict_all(model, crops: np.ndarray, landmarks: np.ndarray,
     model.eval()
     with torch.no_grad():
         for i in range(0, len(crops), batch):
-            imgs = [eval_transform(c, l, input_size)[0]
+            imgs = [eval_transform(c, l, input_size, base_frac)[0]
                     for c, l in zip(crops[i:i + batch], landmarks[i:i + batch])]
             x = torch.from_numpy(np.stack(imgs)).float().unsqueeze(1) / 255.0
             x = ((x - mean) / std).to(device)
@@ -126,13 +129,16 @@ def cpu_timing(model, cfg: dict) -> dict:
 
 
 def render_worst(crops: np.ndarray, gt: np.ndarray, pred: np.ndarray,
-                 nme: np.ndarray, schema, k: int, out_path: Path) -> None:
-    """Worst-k faces: ground truth green, prediction in group colours."""
+                 nme: np.ndarray, schema, k: int, out_path: Path,
+                 base_frac: float = 1.0) -> None:
+    """Worst-k faces: ground truth green, prediction in group colours. Drawn
+    on the canonical crop, the same framing the model saw."""
     order = np.argsort(-nme)[:k]
     tiles = []
     big = crops.shape[1] * 3
     for i in order:
-        tile = cv2.cvtColor(cv2.resize(crops[i], (big, big),
+        canon, _ = eval_transform(crops[i], gt[i], crops.shape[1], base_frac)
+        tile = cv2.cvtColor(cv2.resize(canon, (big, big),
                                        interpolation=cv2.INTER_NEAREST),
                             cv2.COLOR_GRAY2BGR)
         for p in schema.points:
@@ -188,11 +194,22 @@ def main() -> int:
         f"{sum(p.numel() for p in model.parameters()):,} params")
 
     data = load_cache_from_cfg(cfg, "test")
+    cache_expand = float(data.manifest.get("crop_expand", 1.0))
+    reference = float(require(cfg, "preprocess.reference_expand"))
+    base_frac = reference / cache_expand
     say(f"test split: {data.crops.shape[0]} faces "
         "(ground-truth-box crops - the standard WFLW protocol; the full "
         "Haar-pipeline comparison is milestone 6)")
-    pred = predict_all(model, data.crops, data.landmarks, cfg, device)
-    gt = data.landmarks.astype(np.float64)
+    say(f"framing: canonical k=1.0 (reference_expand {reference} out of a "
+        f"cache holding {cache_expand}); base_frac {base_frac:.3f}")
+    if base_frac > 1.0 + 1e-6:
+        raise ValueError(
+            f"reference_expand {reference} exceeds the cache's crop_expand "
+            f"{cache_expand}; the canonical crop is not inside this cache.")
+    pred = predict_all(model, data.crops, data.landmarks, cfg, device, base_frac)
+    # ground truth in the same canonical-crop space as the predictions
+    gt = np.stack([eval_transform(c, l, model.arch["input_size"], base_frac)[1]
+                   for c, l in zip(data.crops, data.landmarks)]).astype(np.float64)
 
     nme = metrics.nme_per_face(pred, gt, schema)
     say("\n=== 1. Overall ===")
@@ -225,7 +242,8 @@ def main() -> int:
     k = int(require(cfg, "eval.save_worst"))
     if k > 0:
         worst_png = out_dir / "worst_faces.png"
-        render_worst(data.crops, gt, pred, nme, schema, min(k, len(nme)), worst_png)
+        render_worst(data.crops, gt, pred, nme, schema, min(k, len(nme)),
+                     worst_png, base_frac)
         say(f"\nworst-{k} render: {worst_png}")
 
     np.save(out_dir / "nme_per_face.npy", nme)
