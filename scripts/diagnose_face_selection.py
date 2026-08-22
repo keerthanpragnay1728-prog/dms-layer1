@@ -289,10 +289,13 @@ def main() -> int:
     say("  the judge is unreliable on these crops and the split means nothing.")
     judged = {"winner is a face": 0, "winner is not a face": 0}
     control_hits, control_total = 0, 0
+    # imported outside the try: naming MediaPipeUnavailable in the except
+    # clause only works if the import already succeeded
+    from dms_layer1.detect.mediapipe_detector import (MediaPipeLandmarkDetector,
+                                                      MediaPipeUnavailable)
+    from dms_layer1.landmarks.schema import load_schema as _load_schema
+    judge = None
     try:
-        from dms_layer1.detect.mediapipe_detector import (MediaPipeLandmarkDetector,
-                                                          MediaPipeUnavailable)
-        from dms_layer1.landmarks.schema import load_schema as _load_schema
         judge = MediaPipeLandmarkDetector(
             cfg, _load_schema(resolve_path(cfg, require(cfg, "landmark_schema"))))
 
@@ -326,6 +329,9 @@ def main() -> int:
     except (ImportError, MediaPipeUnavailable) as e:
         say(f"    skipped: {e}")
         n_j = 0
+    finally:
+        if judge is not None:
+            judge.close()   # quiet teardown; see the wrapper's close() docstring
 
     # ---- 4. renders --------------------------------------------------------
     tiles = []

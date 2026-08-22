@@ -126,16 +126,28 @@ python scripts/compare_detectors.py --config configs/layer1_base.yaml --split te
 in, 24 (x, y) points in frame coordinates out (schema order), or None when
 no face. `OurLandmarkDetector` is the deployment path from milestone 3
 (largest Haar face, calibrated crop box, our model, coordinates mapped
-back). `MediaPipeLandmarkDetector` wraps Face Mesh with refine_landmarks
-and selects the 24 indices defined in `configs/landmarks_24.yaml`, so both
+back). `MediaPipeLandmarkDetector` wraps the Tasks API `FaceLandmarker` and
+selects the 24 indices defined in `configs/landmarks_24.yaml`, so both
 implementations emit identical semantics. The comparison script renders
 mapping-verification overlays for MediaPipe (checked by eye before the
 mapping is trusted), then reports detection rates, NME on matched and on
 jointly matched faces, a per-point cross-detector offset table, the
 GT-box versus Haar-box price for our model, same-machine timing, and
-footprints. mediapipe is pinned to exactly 0.10.21, the last published
-version with the solutions API (removed in 0.10.30, well before the 1.0
-numbering suggests); its wheel bundles the models in the package.
+footprints.
+
+MediaPipe's legacy `solutions` Face Mesh, which this wrapper originally
+used, no longer exists in the package, and the last version that has it
+cannot be installed alongside Kaggle's tensorflow. The Tasks API replaces
+it. Its model is a `.task` bundle rather than files inside the wheel:
+`assets/face_landmarker.task` is vendored, and
+`detector.mediapipe.model_path` takes an explicit path or `auto`, which
+searches the same places the crop cache and the weights are searched for.
+The pupil indices are iris points, which exist only in the 478-point
+bundle; the wrapper checks and says so rather than failing obscurely.
+`scripts/verify_mediapipe_mapping.py` re-verifies the 24 indices against
+ground truth, per point, and also reports whether a different mesh index
+would have been closer. `docs/dependency_notes.md` records the version
+history alongside the same finding for OpenCV 5.
 
 Most scripts also take `--synthetic`, which runs them on generated
 schematic faces. That exists so the code paths can be exercised on a

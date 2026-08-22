@@ -177,6 +177,15 @@ detector:
   weights: auto
   mediapipe:
     min_detection_confidence: 0.5
+    # Tasks API model bundle. 'auto' searches assets/, the repo root and
+    # /kaggle/input the same way the cache and the weights do, and accepts
+    # exactly one unambiguous hit. The 478-point bundle is required: the
+    # pupil indices (468, 473) are iris points, which the 468-point bundle
+    # does not have. The wrapper checks the returned count and says so.
+    model_path: auto
+    model_url: https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+    allow_download: true   # Kaggle notebooks have internet on; set false and
+                           # point model_path at an uploaded dataset if not
 
 # ----- milestone 5: test-set evaluation --------------------------------------
 eval:

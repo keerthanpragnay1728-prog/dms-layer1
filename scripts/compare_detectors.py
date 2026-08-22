@@ -19,8 +19,8 @@ Sections:
   4. The calibration price: our model evaluated on ground-truth boxes
      against Haar-derived boxes on the same faces (the deploy resolution
      cost flagged in milestone 3, measured at last).
-  5. Footprints: our exported weights and cascade files against the model
-     files bundled inside the mediapipe package.
+  5. Footprints: our exported weights and cascade files against MediaPipe's
+     .task model bundle.
 
 Timing caveats: static image mode for MediaPipe (its video mode with
 tracking is faster in deployment); all times are this machine, one session,
@@ -48,38 +48,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dms_layer1.config import load_config, require, resolve_path, save_config_snapshot
 from dms_layer1.data import wflw
 from dms_layer1.data.crops import extract_square, square_box_around, to_crop_space
-from dms_layer1.detect.haar import box_iou
 from dms_layer1.detect.interface import as_gray
 from dms_layer1.detect.cross import OurModelOnMediaPipeBox
 from dms_layer1.detect.ours import OurLandmarkDetector
 from dms_layer1.evaluation import metrics
+from dms_layer1.evaluation.matching import match_target
 from dms_layer1.landmarks.schema import load_schema
 from dms_layer1.viz.overlay import GROUP_COLORS, render_points_overlay
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
-MATCH_IOU = 0.30
 _lines: list[str] = []
 
 
 def say(text: str = "") -> None:
     print(text)
     _lines.append(text)
-
-
-def rect_of(box) -> tuple[float, float, float, float]:
-    return (box.x0, box.y0, box.x0 + box.side, box.y0 + box.side)
-
-
-def match_target(pts24: np.ndarray, gt24: np.ndarray) -> bool:
-    """Detected points count as the target face when the boxes around both
-    24-point sets overlap at IoU >= MATCH_IOU. Matching on the POINTS (the
-    only currency both detectors share) folds gross landmark failure into
-    the detection rate: a detector that finds the face but scatters its
-    points counts as a miss. With trained models that is the intended
-    reading, "usable detection"."""
-    det_box = square_box_around(pts24, 1.3)
-    gt_box = square_box_around(gt24, 1.3)
-    return box_iou(rect_of(det_box), rect_of(gt_box)) >= MATCH_IOU
 
 
 def render_compare(frame, gt24, results: dict, title: str) -> np.ndarray:
@@ -178,6 +161,10 @@ def main() -> int:
     threshold = float(require(cfg, "eval.failure_threshold"))
     rng = random.Random(require(cfg, "seed"))
 
+    # library provenance: both findings in docs/dependency_notes.md are about
+    # versions changing under the project, so the run records what it used
+    say(f"opencv {cv2.__version__}, torch {torch.__version__}")
+
     ours = OurLandmarkDetector(cfg, weights=args.weights)
     say(f"ours: weights loaded (epoch {ours.meta['epoch']}, "
         f"val NME {ours.meta['val_nme']:.3f}%)" if ours.meta["val_nme"]
@@ -189,7 +176,10 @@ def main() -> int:
                 MediaPipeLandmarkDetector, MediaPipeUnavailable)
             try:
                 mp_det = MediaPipeLandmarkDetector(cfg, SCHEMA)
-                say("mediapipe: FaceMesh ready (refine_landmarks on)")
+                import mediapipe as mp_pkg
+                say(f"mediapipe {mp_pkg.__version__}: Tasks FaceLandmarker, "
+                    f"bundle {mp_det.model_path.name} (iris head present, "
+                    "which is what the pupil indices need)")
             except MediaPipeUnavailable as e:
                 say(f"mediapipe UNAVAILABLE: {e}\ncontinuing ours-only")
         except ImportError as e:
@@ -371,22 +361,14 @@ def main() -> int:
     from dms_layer1.model.net import model_size_mb
     say(f"  ours: model {model_size_mb(ours.model):.2f} MB (fp32 params) "
         "+ cascade XML 0.93 MB")
-    try:
-        import mediapipe as mp_pkg
-        mp_root = Path(mp_pkg.__file__).parent
-        files = sorted(set(list(mp_root.rglob("face*.tflite"))
-                           + list(mp_root.rglob("face*.binarypb"))
-                           + list(mp_root.rglob("iris*.tflite"))))
-        total = sum(f.stat().st_size for f in files) / 1e6
-        if files:
-            say(f"  mediapipe face/iris models: {total:.2f} MB across "
-                f"{len(files)} bundled files (approximate; the package "
-                "carries more)")
-        else:
-            say("  mediapipe footprint: no face model files found in the "
-                "installed package (wrong version?)")
-    except Exception:
-        say("  mediapipe footprint: package not inspectable here")
+    if mp_det is not None:
+        mb = mp_det.model_path.stat().st_size / 1e6
+        say(f"  mediapipe: model bundle {mp_det.model_path.name} {mb:.2f} MB "
+            "(face detection + mesh + iris in one .task file). The Tasks API "
+            "downloads this rather than shipping models in the wheel, so it "
+            "is the whole model footprint, unlike the pre-0.10.30 packaging.")
+    else:
+        say("  mediapipe footprint: not measured (detector unavailable)")
 
     yaml_out = {
         "n_images": n_targets,
@@ -401,6 +383,8 @@ def main() -> int:
     (out_dir / "report.txt").write_text("\n".join(_lines) + "\n")
     save_config_snapshot(cfg, out_dir)
     say(f"\nresults + report + config snapshot in {out_dir}")
+    if mp_det is not None:
+        mp_det.close()   # quiet teardown; see the wrapper's close() docstring
     return 0
 
 

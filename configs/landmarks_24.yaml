@@ -102,8 +102,16 @@ flip_permutation: [9, 8, 7, 6, 11, 10,
 nme_normalisation: {left: left_eye_outer, right: right_eye_outer}
 
 # MediaPipe Face Mesh -> the same 24 semantics (milestone 6). Requires the
-# 478-point output (refine_landmarks: true; indices 468-477 are the two
-# irises). Index sources, all to be verified by overlay before trust:
+# 478-point output: indices 468-477 are the two irises. The legacy solutions
+# API produced them with refine_landmarks=True; the Tasks API the wrapper now
+# uses gets them from the model bundle instead, so the flag below records a
+# REQUIREMENT rather than setting anything. The wrapper checks the returned
+# mesh size against it and refuses a 468-point bundle.
+# Index sources below. They are verified two ways, not assumed:
+# scripts/verify_mediapipe_mapping.py measures each one against WFLW
+# ground truth and reports whether another mesh index would be closer,
+# and scripts/compare_detectors.py renders them for the milestone-1
+# eyeball check.
 #   image-LEFT eye (mesh "right eye"): 33 outer corner, 160 upper toward
 #     outer, 158 upper toward inner, 133 inner corner, 153 lower toward
 #     inner, 144 lower toward outer. This is the standard 6-point EAR set.

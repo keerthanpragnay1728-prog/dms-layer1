@@ -311,3 +311,27 @@ line before anything else. Weights trained before this record say
    settings grid says so, revisit the cascade settings under the
    one-box-per-frame objective. This is now the largest open loss.
 5. Only then re-run `compare_detectors.py`, once, on a fixed path.
+
+## The MediaPipe side had to be rebuilt before it could be compared
+
+The first milestone-6 run produced one row instead of three because
+MediaPipe never loaded. The legacy `solutions` Face Mesh the wrapper was
+written against had been removed from the package, and the version pin that
+was supposed to guarantee it (`>=0.10,<1`) did not: removal happened at
+0.10.30, not at 1.0. Pinning exactly to 0.10.21, the last release that ships
+solutions, was correct about the API and unusable in practice, because
+0.10.21 needs protobuf < 5 and Kaggle's tensorflow needs protobuf >= 5.
+
+The wrapper is now on the Tasks API, which needs no protobuf pin, loads its
+model from a vendored `.task` bundle, and gets the iris points (the pupil
+indices) from the bundle rather than from a `refine_landmarks` flag. The
+24-index mapping was re-verified on the new mesh rather than assumed to
+carry over: `scripts/verify_mediapipe_mapping.py`, contour points identical
+to within 0.1 points of IOD, everything else within the difference between
+two model generations. Full history and measurements in
+`docs/dependency_notes.md`.
+
+For the ablation this is a note about reproducibility, not about accuracy:
+the comparison runs against whatever MediaPipe ships today, and what it
+ships changed under the project. The report should name the exact version
+and bundle used, which the comparison script now prints and records.

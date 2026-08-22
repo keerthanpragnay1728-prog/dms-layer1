@@ -31,12 +31,31 @@ class HaarError(Exception):
     """Raised when the cascade file cannot be found or loaded."""
 
 
-def _load_cascade(name: str) -> cv2.CascadeClassifier:
-    """Resolution order: the cascade vendored in this repo's assets/ (pinned
-    -- OpenCV wheels do not reliably ship the data files, e.g. opencv 5.x
-    wheels drop them), then OpenCV's bundled data dir."""
-    candidates = [Path(__file__).resolve().parents[2] / "assets" / name,
-                  Path(cv2.data.haarcascades) / name]
+def _opencv_data_dir() -> Path | None:
+    """OpenCV's bundled cascade directory, if this build has one. The
+    opencv-python 5.0 wheel ships no cascade files, so this is a fallback,
+    not the primary source."""
+    try:
+        return Path(cv2.data.haarcascades)
+    except AttributeError:
+        return None
+
+
+def _load_cascade(name: str):
+    """Resolution order: the cascade vendored in this repo's assets/ (pinned,
+    because OpenCV wheels do not reliably ship the data files), then
+    OpenCV's bundled data dir if this build has one."""
+    if not hasattr(cv2, "CascadeClassifier"):
+        raise HaarError(
+            f"This OpenCV build ({cv2.__version__}) has no CascadeClassifier. "
+            "The opencv-python 5.x wheel dropped the Haar API; install "
+            "opencv-python>=4.8,<5 as requirements.txt pins, or an "
+            "opencv-contrib build, which still has it. See "
+            "docs/dependency_notes.md.")
+    data_dir = _opencv_data_dir()
+    candidates = [Path(__file__).resolve().parents[2] / "assets" / name]
+    if data_dir is not None:
+        candidates.append(data_dir / name)
     path = next((p for p in candidates if p.is_file()), None)
     if path is None:
         raise HaarError(

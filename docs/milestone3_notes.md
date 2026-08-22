@@ -155,14 +155,24 @@ recipe before that number exists.
   question anyway: single camera frame, optional downscale, detection every
   Nth frame with box persistence in between.
 * The coordinate round trip from frame to crop space and back is exact.
-* OpenCV 5.x removed the Haar `CascadeClassifier` API and stopped shipping
-  the cascade data files. We saw this directly: the OpenCV 5.0 wheel has
-  neither. The project therefore pins `opencv-python>=4.8,<5` and vendors
+* The `opencv-python` 5.0 wheel has no Haar `CascadeClassifier` and ships no
+  cascade data files. We saw this directly in the wheel: zero files matching
+  `haarcascade*`, and no `CascadeClassifier` in the type stubs. The project
+  therefore pins `opencv-python>=4.8,<5` and vendors
   `haarcascade_frontalface_default.xml` and `haarcascade_profileface.xml`
   in `assets/`, extracted from the OpenCV 4.10 PyPI wheel with their
   original licence headers kept. Worth a sentence in the report: the
-  classical detector this pipeline uses is being retired from its home
-  library.
+  classical detector this pipeline uses is being retired from the main
+  OpenCV distribution.
+
+  Scope correction (milestone 6): this is a statement about the
+  `opencv-python` build, not about OpenCV 5 as such. `opencv-contrib-python`
+  5.0.0.93 still has `CascadeClassifier`, `detectMultiScale3` and 17 cascade
+  XMLs in `cv2.data.haarcascades`, and the repo's Haar tests pass under it.
+  The API moved into the contrib build rather than disappearing. That matters
+  in practice because mediapipe depends on `opencv-contrib-python`, so
+  installing it can pull an OpenCV 5 contrib wheel that shadows the pinned
+  4.x one. See `docs/dependency_notes.md`.
 
 ## The pose problem (17.79%), the sweep, and the decision
 

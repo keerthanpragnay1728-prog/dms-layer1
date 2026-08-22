@@ -63,15 +63,37 @@ def test_our_detector_end_to_end():
 
 
 def test_mediapipe_detector_on_schematic():
+    """The Tasks-API wrapper: it loads, it returns the iris head, and its 24
+    mapped points land on the anatomy they claim. Real verification is
+    scripts/verify_mediapipe_mapping.py on WFLW; this pins the code path and
+    catches an index typo."""
     if importlib.util.find_spec("mediapipe") is None:
         print("SKIP: mediapipe not installed")
         return
-    from dms_layer1.detect.mediapipe_detector import MediaPipeLandmarkDetector
+    from dms_layer1.detect.mediapipe_detector import (MediaPipeLandmarkDetector,
+                                                      MediaPipeUnavailable)
+    try:
+        det = MediaPipeLandmarkDetector(BASE_CFG, SCHEMA)
+    except MediaPipeUnavailable as e:
+        # no .task bundle attached, or no EGL/GLES on this machine
+        print(f"SKIP: mediapipe unavailable ({e})")
+        return
+    with det:   # closed here rather than at teardown; see close()'s docstring
+        _check_mediapipe_mapping(det)
 
-    det = MediaPipeLandmarkDetector(BASE_CFG, SCHEMA)
+
+def _check_mediapipe_mapping(det) -> None:
     img, pts98 = generate_face()
+    mesh = det.mesh(img)
+    assert mesh is not None and mesh.shape[1] == 2
+    # 478 not 468: the iris head is the Tasks equivalent of refine_landmarks,
+    # and the pupil indices live in it
+    assert mesh.shape[0] >= 478, f"bundle returned {mesh.shape[0]} points"
+
     out = det.detect(img)
     assert out is not None and out.points.shape == (24, 2)
+    # a tuple would be read as multi-dimensional indexing, hence list()
+    assert np.allclose(out.points, mesh[list(SCHEMA.mediapipe_indices)])
     gt24 = pts98[SCHEMA.wflw_indices]
     iod = np.linalg.norm(gt24[SCHEMA.nme_right_index] - gt24[SCHEMA.nme_left_index])
     off = np.linalg.norm(out.points - gt24, axis=1) / iod
