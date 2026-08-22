@@ -51,14 +51,14 @@ All three runs, same schedule, same seed, same seeded validation split of
    is roughly 0.1 points, and run to run seed variance for models this size
    is of the same order, so the 0.245 point deficit is at the edge of
    noise. The robust claim is not "width 48 is worse" but "the extra
-   capacity buys nothing". Whether the small deficit is mild overfitting
-   can be read off the two metrics CSVs: width 32 finished with train 4.95
-   against val 4.93 (no gap); if width 48 shows train clearly below val,
-   that is the overfitting signature, and if its gap is also near zero the
-   deficit is noise. Either way the conclusion for the report stands: at
-   6,750 training faces and this augmentation, the 24 point task at 112 px
-   input is not capacity limited at width 32, and the smaller model wins on
-   every axis.
+   capacity buys nothing". The overfitting check was done on the metrics
+   CSVs: width 32 finished with train 4.95 against val 4.93, width 48 with
+   train 5.143 against val 5.080. Val sits slightly below train in both,
+   same direction and similar magnitude, so there is no overfitting
+   signature and the deficit is not attributed to any mechanism. The
+   conclusion for the report: at 6,750 training faces and this
+   augmentation, the 24 point task at 112 px input is not capacity limited
+   at width 32, and the smaller model wins on every axis.
 3. The 200 epoch schedule probe was skipped. Both width runs converged as
    the cosine reached its floor rather than against the patience limit, and
    width 48 gave no sign the schedule was binding.
