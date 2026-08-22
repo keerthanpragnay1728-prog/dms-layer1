@@ -79,7 +79,13 @@ face_detector:
   # scripts/diagnose_face_selection.py re-scores these settings for the
   # one-box-per-frame objective deployment actually has.
   scale_factor: 1.05   # detectMultiScale pyramid step
-  min_neighbors: 2
+  min_neighbors: 5     # raised from 2 after the selection diagnostic: the
+                       # three candidate settings are statistically TIED on
+                       # the realized (confidence-selected) rate at n=600,
+                       # so the choice falls to the secondary criteria, and
+                       # 1.05/5 keeps the oracle high (69.2% vs 61.8% at
+                       # 1.10/5, a significant 11 points) at the same latency
+                       # as 1.05/2 while halving the spurious boxes
   min_size_frac: 0.08  # min face side as a fraction of min(image h, w)
   equalize_hist: true  # histogram-equalise before detection
   # Calibration from a raw Haar box to the model's crop box: side =
@@ -96,7 +102,11 @@ face_detector:
   # found 'largest' picks the subject on only 27.67% of single-face WFLW
   # images at these settings, because loose settings emit oversized spurious
   # boxes. scripts/diagnose_face_selection.py measures the rules.
-  selection: largest   # largest | confidence | central | largest_sane | confidence_sane
+  # Confidence (cascade level weight) beats largest by about 13 points and,
+  # unlike largest, is flat across detector settings: on failing frames the
+  # winner's level weight is 2.67 BELOW the true face's, so the cascade's own
+  # ordering already knows which box is the face.
+  selection: confidence  # largest | confidence | central | largest_sane | confidence_sane
   max_size_frac: 0.90  # *_sane rules drop boxes wider than this fraction of
                        # the shorter image side (a face is not the whole frame)
   # Profile-face fallback for turned heads: when the frontal cascade finds

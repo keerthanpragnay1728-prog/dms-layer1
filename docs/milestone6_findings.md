@@ -173,6 +173,123 @@ framing and centre offset distributions printed beside them.
 Face selection is a separate and now larger loss, unchanged at 27.67% on
 single-face images and not yet diagnosed.
 
+## Finding 4 resolved: selection, and where the classical front end caps
+
+The oversized-box hypothesis was wrong. On single-face failures, 77.2% of
+the winning boxes are DISJOINT from the face and only 3.3% contain it, with
+a median of 6 detections per failing frame (up to 32). The cascade usually
+does find the face: it was present in 281 of 368 failures, ranking a median
+third by size. Its level weight on failing frames is 2.67 ABOVE the winner's,
+so the cascade's own confidence ordering already knows which box is the face
+and the largest-box rule was throwing that information away.
+
+Selection rules on single-face images: largest 29.23%, confidence 42.31%,
+central 26.35%, oracle 71.92%. Size sanity does nothing at any threshold,
+which follows from the boxes being disjoint rather than oversized. Across
+detector settings the confidence rule is flat near 40% while largest swings
+from 27.67% to 38.00%, so confidence is robust to the tuning rather than
+dependent on it. **Adopted: confidence selection**, worth about 13 points for
+no retraining and no extra computation.
+
+Settings, re-scored for the one-box-per-frame objective:
+
+| sf, nb  | boxes/img | largest | confidence | oracle | ms  |
+|---------|----------:|--------:|-----------:|-------:|----:|
+| 1.05, 2 | 6.21      | 27.67%  | 39.67%     | 72.83% | 226 |
+| 1.05, 5 | 3.77      | 35.50%  | 40.50%     | 69.17% | 229 |
+| 1.10, 5 | 2.62      | 38.00%  | 38.50%     | 61.83% | 116 |
+
+At n = 600 the standard error on these rates is about 2.0 points, so the
+three confidence numbers are statistically indistinguishable (largest
+pairwise difference 2.0 points, SE 2.8). The oracle differences are real
+(11.0 points, SE 2.7). The choice therefore falls to the secondary criteria,
+and **1.05 / 5 is adopted**: it ties for the best realized rate, costs the
+same as 1.05 / 2, halves the spurious boxes, and keeps the oracle within 3.7
+points of the maximum. Oracle headroom is worth protecting because temporal
+tracking in a cabin re-acquires from the candidate set, and that is a rule
+WFLW stills cannot test.
+
+The milestone-3 hypothesis was half right. Loose settings do create the
+spurious boxes that break largest-box selection, but tightening trades real
+faces for fake ones: the oracle falls from 72.83% to 61.83%. There is no
+setting that fixes this by itself.
+
+## The ceiling, and how to state it honestly
+
+On single-face WFLW images the decomposition is roughly:
+
+* 28% the cascade never finds the face at all,
+* 30% it finds the face but confidence selection still picks another box,
+* 42% the pipeline acquires the target face.
+
+The plain statement, which is the one to lead with: **with a Haar cascade
+front end at any setting tested, target-face acquisition on the WFLW test
+set caps near 40%, and even a perfect selection rule would cap near 72%.**
+That is a property of the classical detector, not of the landmark model, and
+it is the concrete reason production driver monitoring systems use learned
+detectors. Say that first, without softening it.
+
+Then bound its transferability, in both directions, because the honest
+answer is that WFLW is harsher than a cabin AND part of this would follow
+the pipeline into a cabin:
+
+* Does not transfer. WFLW is web photography: most test images carry at
+  least one of the six difficulty flags, and images contain faces that are
+  not annotated, so a box that looks like a failure here may be a correct
+  detection of a different real face. A driver-facing camera sees one
+  cooperative subject at a roughly fixed distance under controlled framing.
+* Does transfer. The cascade fires on non-face background, which a cabin
+  supplies in the form of headrests, seat backs, window frames and door
+  pillars. A front passenger is a genuine second face, so selection is a
+  real cabin problem, not only a crowd-photo artifact. And the 28%
+  no-detection share concentrates on exactly the turned heads that
+  inattentiveness detection is about.
+* Not yet known, and it decides how much weight each bullet carries: are
+  the winning disjoint boxes real unannotated faces or background false
+  positives? Section 3b of `diagnose_face_selection.py` now judges each
+  winning crop with MediaPipe as an independent detector, with the true-face
+  box run through the same judge as a control. Mostly-faces supports the
+  dataset reading; mostly-not-faces supports the detector reading. Report
+  the measured split rather than either intuition.
+
+What survives regardless: the landmark model is evaluated on ground-truth
+boxes under the standard WFLW protocol, so the acquisition ceiling does not
+contaminate the landmark comparison, which is the project's actual
+contribution. What does not survive: any claim that this classical full
+pipeline is deployable as it stands. Both belong in the report.
+
+## What this changes about the MediaPipe comparison
+
+It changes it fundamentally, and the design has been adjusted rather than
+the result explained away afterwards. MediaPipe carries its own learned
+detector, which is not subject to any of the above, so a naive full-frame
+comparison would be dominated by the detectors and would mostly restate a
+known result (a learned detector beats a Haar cascade) while letting that
+detector gap read as a landmark-model gap. The comparison now runs three
+conditions:
+
+| condition       | face from  | landmarks from | isolates                    |
+|-----------------|------------|----------------|-----------------------------|
+| ours            | Haar       | our model      | the deployable classical stack |
+| ours_on_mp_box  | MediaPipe  | our model      | one component swapped       |
+| mediapipe       | MediaPipe  | MediaPipe mesh | the reference stack         |
+
+Row 1 against row 2 is the face detector's contribution. Row 2 against row 3
+is the landmark model's contribution on identical inputs, which is the
+project's question. `dms_layer1/detect/cross.py` implements row 2 behind the
+same `LandmarkDetector` interface, so nothing downstream knows the
+difference, and it is a legitimate deployable configuration for anyone
+willing to ship MediaPipe's detector. The ground-truth-box protocol
+(milestone 5) remains the fourth, detector-free comparison.
+
+Timing needs the same care. Our landmark model runs in about 2.9 ms while
+Haar detection costs 116 to 229 ms on the same machine, so at the pipeline
+level our model's size advantage is invisible and MediaPipe's faster
+detector will dominate any full-pipeline timing. Report model-only and
+whole-pipeline timing as separate numbers, and state whether detection runs
+every frame or is amortised by tracking, or the speed claim will be wrong in
+one direction or the other.
+
 ## Guard added after a wasted run
 
 A diagnostic run auto-loaded stale uploaded weights and reproduced the old

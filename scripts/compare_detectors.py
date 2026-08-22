@@ -50,6 +50,7 @@ from dms_layer1.data import wflw
 from dms_layer1.data.crops import extract_square, square_box_around, to_crop_space
 from dms_layer1.detect.haar import box_iou
 from dms_layer1.detect.interface import as_gray
+from dms_layer1.detect.cross import OurModelOnMediaPipeBox
 from dms_layer1.detect.ours import OurLandmarkDetector
 from dms_layer1.evaluation import metrics
 from dms_layer1.landmarks.schema import load_schema
@@ -209,16 +210,22 @@ def main() -> int:
     for rel, recs in by_image.items():
         targets[rel] = max(recs, key=lambda r: square_box_around(r.landmarks98, 1.0).side)
 
-    results = {"ours": {}, "mediapipe": {}}      # rel -> (nme, pts) for matches
-    misses = {"ours": [], "mediapipe": []}
-    times = {"ours": [], "mediapipe": []}
-    unmatched = {"ours": 0, "mediapipe": 0}
     frames_cache: dict[str, np.ndarray] = {}
     preview_rels = set(rng.sample(images, min(250, len(images))))
 
     detectors = {"ours": ours}
     if mp_det is not None:
         detectors["mediapipe"] = mp_det
+        # One component swapped: MediaPipe's face, our landmark model. Row 1
+        # vs this row isolates the detector; this row vs 'mediapipe' isolates
+        # the landmark model on identical inputs, which is the comparison the
+        # project is about. Without it a detector gap reads as a model gap.
+        detectors["ours_on_mp_box"] = OurModelOnMediaPipeBox(cfg, ours, mp_det)
+
+    results = {n: {} for n in detectors}         # rel -> (nme, pts) for matches
+    misses = {n: [] for n in detectors}
+    times = {n: [] for n in detectors}
+    unmatched = {n: 0 for n in detectors}
 
     for n_img, rel in enumerate(images, 1):
         frame = cv2.imread(str(wflw.image_path(paths, by_image[rel][0])),

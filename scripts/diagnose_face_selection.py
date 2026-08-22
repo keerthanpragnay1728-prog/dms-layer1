@@ -45,7 +45,8 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dms_layer1.config import load_config, require, save_config_snapshot
+from dms_layer1.config import (load_config, require, resolve_path,
+                               save_config_snapshot)
 from dms_layer1.data import wflw
 from dms_layer1.data.crops import square_box_around
 from dms_layer1.detect.haar import (SELECTION_RULES, HaarFaceDetector, box_iou,
@@ -276,6 +277,56 @@ def main() -> int:
             f"{row['confidence_sane_pct']:>9.2f}% {row['oracle_pct']:>7.2f}% "
             f"{row['ms_median']:>6.0f}")
 
+    # ---- 3b. are the winning boxes faces at all? ---------------------------
+    say("\n=== 3b. What the winning boxes really are, judged independently ===")
+    say("  A box that beats the true face is either a REAL unannotated face")
+    say("  (WFLW is web photography, so this is a dataset property that a")
+    say("  one-driver cabin does not share) or a false positive on background")
+    say("  (a detector property that a cabin DOES share: headrest, seat back,")
+    say("  window frame). The two readings support opposite report claims, so")
+    say("  MediaPipe judges each crop independently. The true-face box is run")
+    say("  through the same judge as a control: if the control is not high,")
+    say("  the judge is unreliable on these crops and the split means nothing.")
+    judged = {"winner is a face": 0, "winner is not a face": 0}
+    control_hits, control_total = 0, 0
+    try:
+        from dms_layer1.detect.mediapipe_detector import (MediaPipeLandmarkDetector,
+                                                          MediaPipeUnavailable)
+        from dms_layer1.landmarks.schema import load_schema as _load_schema
+        judge = MediaPipeLandmarkDetector(
+            cfg, _load_schema(resolve_path(cfg, require(cfg, "landmark_schema"))))
+
+        def has_face(gray, box, margin: float = 0.35) -> bool:
+            x0, y0, x1, y1 = rect_of(box)
+            m = margin * max(x1 - x0, y1 - y0)
+            h, w = gray.shape[:2]
+            xa, ya = max(0, int(x0 - m)), max(0, int(y0 - m))
+            xb, yb = min(w, int(x1 + m)), min(h, int(y1 + m))
+            if xb - xa < 24 or yb - ya < 24:
+                return False
+            return judge.detect(gray[ya:yb, xa:xb]) is not None
+
+        for rel in rng.sample(fails, min(150, len(fails))):
+            picked = select_face(boxes[rel], "largest", grays[rel].shape, max_frac)
+            if picked is None:
+                continue
+            judged["winner is a face" if has_face(grays[rel], picked)
+                   else "winner is not a face"] += 1
+            control_total += 1
+            control_hits += has_face(grays[rel], gt_box[rel])
+        n_j = sum(judged.values())
+        if n_j:
+            for k, v in judged.items():
+                say(f"    {k:<22} {v:>4}  ({100 * v / n_j:5.1f}%)")
+            say(f"    control, judge finds a face in the TRUE face box: "
+                f"{100 * control_hits / max(1, control_total):.1f}% "
+                f"(n={control_total}); a low control invalidates the split above")
+        else:
+            say("    no failures to judge on this population")
+    except (ImportError, MediaPipeUnavailable) as e:
+        say(f"    skipped: {e}")
+        n_j = 0
+
     # ---- 4. renders --------------------------------------------------------
     tiles = []
     for rel in rng.sample(fails, min(6, len(fails))):
@@ -314,7 +365,8 @@ def main() -> int:
                                       for k, v in rule_rows.items()},
                "oracle_pct": [round(100 * float(np.mean(oracle_all)), 2),
                               round(100 * float(np.mean(oracle_single)), 2)],
-               "settings_grid": grid_rows}
+               "settings_grid": grid_rows,
+               "winner_identity": judged if n_j else None}
     with open(out_dir / "m6_selection.yaml", "w") as f:
         yaml.safe_dump(results, f, sort_keys=False)
     (out_dir / "report.txt").write_text("\n".join(_lines) + "\n")
