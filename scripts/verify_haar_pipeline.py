@@ -2,23 +2,23 @@
 """Milestone 3: verify the Haar face-detection front-end on WFLW.
 
 Runs the cascade over every image of a split and reports:
-  1. Detection rate — the fraction of annotated faces matched by a Haar box
+  1. Detection rate - the fraction of annotated faces matched by a Haar box
     (IoU vs the ground-truth crop box >= face_detector.match_iou), overall
     and per attribute subset. Large-pose/occlusion rates matter for in-cabin
     use. Unmatched Haar boxes are counted per image but NOT called false
     positives: WFLW images contain unannotated faces.
-  2. Calibration — measured box_scale / box_shift from matched pairs, i.e.
+  2. Calibration - measured box_scale / box_shift from matched pairs, i.e.
     how a raw Haar box maps to the crop box the model trains on. Prints
     recommended config values to replace the provisional ones.
-  3. Containment — fraction of faces whose 24 landmarks all fall inside the
+  3. Containment - fraction of faces whose 24 landmarks all fall inside the
     calibrated crop box (with the current config and with the measured
     medians). If the crop misses landmarks, the model cannot predict them.
-  4. Round trip — landmarks mapped frame -> calibrated crop space -> back
+  4. Round trip - landmarks mapped frame -> calibrated crop space -> back
     (max error, exact math), plus the quantisation bound at the model input
     resolution.
-  5. Timing — detection ms/image on this CPU (relative comparison only; not
+  5. Timing - detection ms/image on this CPU (relative comparison only; not
     a deployment figure).
-  6. Previews — matched faces (ground-truth box green, raw Haar red,
+  6. Previews - matched faces (ground-truth box green, raw Haar red,
     calibrated crop cyan; plus the extracted model crop with ground-truth
     points), and a page of missed faces.
 
@@ -185,7 +185,7 @@ def main() -> int:
     if args.synthetic:
         import tempfile
         from dms_layer1.data.synthetic import write_synthetic_dataset
-        say("SYNTHETIC MODE: schematic faces — smoke test of the code path only.")
+        say("SYNTHETIC MODE: schematic faces - smoke test of the code path only.")
         root = write_synthetic_dataset(tempfile.mkdtemp(prefix="wflw_synth_"),
                                        require(cfg, "dataset.attribute_names"),
                                        seed=require(cfg, "seed"))
@@ -264,7 +264,7 @@ def main() -> int:
     for a in require(cfg, "dataset.attribute_names"):
         say(f"  {a:<14} {rate(lambda r, a=a: r.attributes[a] == 1)}")
     say(f"  unmatched Haar boxes: {unmatched_boxes} total "
-        f"({unmatched_boxes / max(1, len(images)):.2f}/image) — NOT necessarily "
+        f"({unmatched_boxes / max(1, len(images)):.2f}/image) - NOT necessarily "
         "false positives; WFLW images contain unannotated faces.")
 
     say("\n=== 2. Calibration: raw Haar box -> model crop box ===")
@@ -274,7 +274,7 @@ def main() -> int:
         cal = calibrate_haar_to_crop(
             [gt_crop_box(r.landmarks98, expand) for r, _ in matched],
             [hb for _, hb in matched])
-        say("  descriptive median fit (how boxes relate on the typical face —")
+        say("  descriptive median fit (how boxes relate on the typical face -")
         say("  NOT the recommendation; a median-fit box loses the tails):")
         for k in ("box_scale", "box_shift_x", "box_shift_y"):
             q = cal[k]
@@ -315,10 +315,10 @@ def main() -> int:
                                   for _, hb in matched]))
         say(f"  quantisation bound at model input {input_size}px: half a crop pixel "
             f"= {0.5 * med_side / input_size:.2f} frame px at the median crop side "
-            f"({med_side}px) — the model regresses continuous coords, so this "
+            f"({med_side}px) - the model regresses continuous coords, so this "
             "bound applies only to integer-pixel readouts.")
 
-    say("\n=== 5. Detection timing (this CPU — relative use only) ===")
+    say("\n=== 5. Detection timing (this CPU - relative use only) ===")
     say(f"  per image: median {np.median(detect_ms):.0f} ms, "
         f"mean {np.mean(detect_ms):.0f} ms, p90 {np.percentile(detect_ms, 90):.0f} ms")
 

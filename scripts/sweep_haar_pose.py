@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Milestone 3 follow-up: can Haar detection on turned heads be lifted?
 
-The full-pipeline run measured 17.79% detection on the WFLW pose subset —
+The full-pipeline run measured 17.79% detection on the WFLW pose subset -
 a problem, not a curiosity, because inattentiveness (gaze off road) is
 exactly the turned-head case. This sweep answers, with numbers:
 
@@ -124,7 +124,7 @@ def main() -> int:
     if args.synthetic:
         import tempfile
         from dms_layer1.data.synthetic import write_synthetic_dataset
-        say("SYNTHETIC MODE: schematic faces — smoke test of the code path only.")
+        say("SYNTHETIC MODE: schematic faces - smoke test of the code path only.")
         root = write_synthetic_dataset(tempfile.mkdtemp(prefix="wflw_synth_"),
                                        require(cfg, "dataset.attribute_names"),
                                        seed=require(cfg, "seed"))
@@ -217,20 +217,20 @@ def main() -> int:
     say("profile fallback; flat = the no-flag reference population; unm/img =")
     say("unmatched boxes per image (relative cost signal, not a false-positive")
     say("rate); ms = median per image without/with the profile passes triggering.")
-    say("Baseline combo is (1.10, 5, 0.08) — the current config.")
+    say("Baseline combo is (1.10, 5, 0.08) - the current config.")
 
     if profile_pairs_baseline and len(profile_pairs_baseline) >= 30:
         cal = calibrate_haar_to_crop(
             [gt_crop_box(rec.landmarks98, expand) for rec, _ in profile_pairs_baseline],
             [hb for _, hb in profile_pairs_baseline])
-        say(f"\nprofile-box calibration (baseline combo, {cal['n_pairs']} matches) —")
+        say(f"\nprofile-box calibration (baseline combo, {cal['n_pairs']} matches) -")
         say("profile boxes frame faces differently from frontal ones:")
         for k in ("box_scale", "box_shift_x", "box_shift_y"):
             q = cal[k]
             say(f"  {k:<12} median {q['median']:+.3f}   IQR [{q['p25']:+.3f}, {q['p75']:+.3f}]")
     elif profile_pairs_baseline is not None:
         say(f"\nprofile-box calibration: only {len(profile_pairs_baseline)} matches "
-            "at the baseline combo — too few to calibrate.")
+            "at the baseline combo - too few to calibrate.")
 
     with open(out_dir / "sweep_results.yaml", "w") as f:
         yaml.safe_dump({"combos": all_results}, f, sort_keys=False)

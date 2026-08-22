@@ -2,7 +2,7 @@
 crop cache (milestone 4).
 
 Augmentations (all ranges from config train.augment): horizontal flip WITH
-landmark index remapping (the schema's flip_permutation — the classic silent
+landmark index remapping (the schema's flip_permutation - the classic silent
 bug, unit-tested in tests/test_augment.py), rotation, scale, translation,
 brightness/contrast, and blur. Geometry is applied as ONE affine warp from
 the cached crop (cache_size px) straight to the model input (input_size px),
@@ -10,7 +10,7 @@ and landmark coordinates go through exactly the same matrix.
 
 Determinism: the per-sample RNG is seeded from (base_seed, epoch, index), so
 an epoch's augmentations are a pure function of the config seed and the
-epoch number — a resumed run regenerates identical batches without having to
+epoch number - a resumed run regenerates identical batches without having to
 persist dataloader RNG state.
 """
 

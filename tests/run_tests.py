@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 MODULES = ["tests.test_schema", "tests.test_wflw_parser", "tests.test_frame",
            "tests.test_crops", "tests.test_cache", "tests.test_haar",
            "tests.test_model", "tests.test_loss", "tests.test_augment",
-           "tests.test_resume", "tests.test_evaluate"]
+           "tests.test_resume", "tests.test_evaluate", "tests.test_export"]
 
 
 def main() -> int:

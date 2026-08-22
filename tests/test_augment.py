@@ -1,6 +1,6 @@
 """Augmentation tests. The flip test is the single most important one in
 this file: a horizontal flip without the landmark index remap is the classic
-silent landmark-training bug — labels stay plausible, training converges,
+silent landmark-training bug - labels stay plausible, training converges,
 and left/right semantics are quietly destroyed."""
 
 from __future__ import annotations

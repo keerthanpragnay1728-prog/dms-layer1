@@ -11,12 +11,12 @@
 # these fixed indices and must never need to know which detector produced them.
 #
 # ---------------------------------------------------------------------------
-# LEFT / RIGHT CONVENTION — read before touching anything:
+# LEFT / RIGHT CONVENTION - read before touching anything:
 #   All "left"/"right" names in this project are in IMAGE space, i.e. the
 #   viewer's left (smaller x coordinate on an upright frontal face).
 #   The subject's anatomical right eye is therefore our "left_eye".
 #   Note: the WFLW readme names index 96 the "right pupil" using the
-#   SUBJECT frame — that is the same physical point as our left_pupil.
+#   SUBJECT frame - that is the same physical point as our left_pupil.
 #   Pick one frame and stay in it; we picked image space because it is what
 #   you can verify by eye in an overlay.
 #
@@ -43,7 +43,7 @@
 #   Each eye is 6 points in the canonical Soukupova & Cech EAR arrangement:
 #   [corner, upper, upper, corner, lower, lower], i.e. the upper lid is traced
 #   by local points 0,1,2 (starting at one corner) and the lower lid by local
-#   points 3,4,5 (starting at the other corner) — three upper, three lower.
+#   points 3,4,5 (starting at the other corner) - three upper, three lower.
 #   With local offsets p0..p5 inside either eye block:
 #       EAR = (|p1 - p5| + |p2 - p4|) / (2 * |p0 - p3|)
 #   The formula is identical for both eyes by construction.

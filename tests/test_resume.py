@@ -1,5 +1,5 @@
 """The brief's mandated resume test: kill a run, resume it, and confirm the
-metrics are indistinguishable from an uninterrupted run — BEFORE the first
+metrics are indistinguishable from an uninterrupted run - BEFORE the first
 long training, not after losing one.
 
 Run A trains 5 epochs straight. Run B trains the same 5-epoch schedule but
@@ -94,7 +94,7 @@ def test_resumed_run_matches_uninterrupted_run():
             for col in ("train_loss", "val_loss", "val_nme_pct", "lr"):
                 da = abs(float(ra[col]) - float(rb[col]))
                 assert da < 2e-6, (f"epoch {ra['epoch']} {col}: "
-                                   f"{ra[col]} vs {rb[col]} — resume diverged")
+                                   f"{ra[col]} vs {rb[col]} - resume diverged")
         assert (tmp / "B" / "ckpt" / "best.pth").is_file()
         assert (tmp / "B" / "curves.png").is_file()
 

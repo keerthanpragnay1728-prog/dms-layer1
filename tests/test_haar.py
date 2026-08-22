@@ -78,7 +78,7 @@ def test_calibration_recovers_known_transform():
 def test_detects_rendered_synthetic_faces():
     """The cascade should find most schematic faces (they are frontal,
     high-contrast, face-like). Lenient threshold: cascade behaviour on
-    drawings is not the real benchmark — that runs on WFLW on Kaggle."""
+    drawings is not the real benchmark - that runs on WFLW on Kaggle."""
     det = HaarFaceDetector(CFG)
     hits = 0
     for i in range(12):

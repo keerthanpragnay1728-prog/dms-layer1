@@ -120,6 +120,7 @@ class Trainer:
     def _checkpoint_payload(self, epoch: int) -> dict:
         return {
             "epoch": epoch,                      # last COMPLETED epoch
+            "arch": self.model.arch,             # so weights load config-free
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
@@ -185,7 +186,7 @@ class Trainer:
 
     def _nme_percent(self, pred01: torch.Tensor, target01: torch.Tensor) -> torch.Tensor:
         """Per-face NME: mean point error / outer-corner inter-ocular
-        distance, in percent. Coordinates may stay in [0,1] space — the
+        distance, in percent. Coordinates may stay in [0,1] space - the
         ratio is scale-free."""
         err = torch.linalg.norm(pred01 - target01, dim=2).mean(dim=1)
         iod = torch.linalg.norm(

@@ -2,7 +2,7 @@
 
 The landmark model refines points inside a face box; it does not find the
 face. This module supplies the box: OpenCV Haar cascade detection, plus the
-calibrated transform from a raw Haar box to the model's crop box — the same
+calibrated transform from a raw Haar box to the model's crop box - the same
 kind of square box the training cache was built with (1.3x the 98-point
 extent). Haar boxes frame a face differently (tighter, roughly brow-to-chin),
 so the transform has two parameters, measured against ground truth by
@@ -172,6 +172,6 @@ class HaarFaceDetector:
 
 
 def gt_crop_box(landmarks98: np.ndarray, expand: float) -> CropBox:
-    """The ground-truth model crop box for an annotated face — by definition
+    """The ground-truth model crop box for an annotated face - by definition
     identical to what the training cache used."""
     return square_box_around(landmarks98, expand)

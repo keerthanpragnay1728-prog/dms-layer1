@@ -3,19 +3,19 @@
 
 Reports, per the project brief:
   1. overall NME (inter-ocular normalised) on the 2,500-face test split
-  2. NME per landmark group (eyelids, pupils, mouth, axis, contour) —
+  2. NME per landmark group (eyelids, pupils, mouth, axis, contour) -
      separately, because pupil error matters far more than contour error
   3. NME + failure rate per WFLW test subset (largepose, expression,
      illumination, makeup, occlusion, blur) and the no-flag subset
   4. failure rate at NME > 10%
-  5. model size (MB, params) and CPU inference time per frame — labelled as
+  5. model size (MB, params) and CPU inference time per frame - labelled as
      measured on THIS machine's CPU; use only as a relative comparison
 
 Protocol note: evaluation runs on the cached ground-truth-box crops (the
 standard WFLW protocol), so landmark quality is not confounded by the face
 detector. The full-pipeline (Haar) comparison belongs to milestone 6.
 
-Outputs: printed report, m5_results.yaml, per-face NME array (.npy — kept
+Outputs: printed report, m5_results.yaml, per-face NME array (.npy - kept
 for the milestone-6 ablation statistics), worst-K face renders (prediction
 vs ground truth), and the config snapshot.
 
@@ -43,7 +43,8 @@ from dms_layer1.config import load_config, require, resolve_path, save_config_sn
 from dms_layer1.data.cache import KAGGLE_INPUT, load_cache_from_cfg
 from dms_layer1.evaluation import metrics
 from dms_layer1.landmarks.schema import load_schema
-from dms_layer1.model.net import LandmarkNet, model_size_mb
+from dms_layer1.model.io import load_model
+from dms_layer1.model.net import model_size_mb
 from dms_layer1.train.data import eval_transform
 from dms_layer1.viz.overlay import GROUP_COLORS
 
@@ -74,11 +75,12 @@ def resolve_checkpoint(path_str: str) -> Path:
     )
 
 
-def predict_all(model: torch.nn.Module, crops: np.ndarray, landmarks: np.ndarray,
+def predict_all(model, crops: np.ndarray, landmarks: np.ndarray,
                 cfg: dict, device: torch.device) -> np.ndarray:
     """Deterministic eval transform + batched forward. Returns (N, 24, 2)
-    predictions in [0, 1] crop space."""
-    input_size = int(require(cfg, "model.input_size"))
+    predictions in [0, 1] crop space. The input size comes from the model's
+    own arch record, so checkpoints of any size evaluate correctly."""
+    input_size = model.arch["input_size"]
     mean = float(require(cfg, "train.pixel_mean"))
     std = float(require(cfg, "train.pixel_std"))
     batch = int(require(cfg, "eval.batch_size"))
@@ -94,10 +96,10 @@ def predict_all(model: torch.nn.Module, crops: np.ndarray, landmarks: np.ndarray
     return np.concatenate(preds).astype(np.float64)
 
 
-def cpu_timing(model: torch.nn.Module, cfg: dict) -> dict:
+def cpu_timing(model, cfg: dict) -> dict:
     """Median per-frame time on CPU, batch size 1: model forward alone, and
     preprocess (resize + normalise) + forward."""
-    input_size = int(require(cfg, "model.input_size"))
+    input_size = model.arch["input_size"]
     iters = int(require(cfg, "eval.cpu_timing_iters"))
     model_cpu = model.to("cpu").eval()
     crop = (np.random.default_rng(0).uniform(0, 255, (128, 128))).astype(np.uint8)
@@ -178,19 +180,16 @@ def main() -> int:
                           if args.device == "auto" else args.device)
 
     schema = load_schema(resolve_path(cfg, require(cfg, "landmark_schema")))
-    model = LandmarkNet(num_points=int(require(cfg, "model.num_points")),
-                        width=int(require(cfg, "model.width")),
-                        input_size=int(require(cfg, "model.input_size"))).to(device)
-    ck = torch.load(ckpt_path, map_location=device, weights_only=False)
-    model.load_state_dict(ck["model"])
-    say(f"checkpoint: {ckpt_path} (completed epoch {ck.get('epoch', '?')}, "
-        f"best val NME {ck.get('best_nme', float('nan')):.3f}%)")
+    model, meta = load_model(ckpt_path, cfg, device)
+    val_nme = meta["val_nme"]
+    say(f"checkpoint: {ckpt_path} (trained epoch {meta['epoch']}, "
+        + (f"val NME {val_nme:.3f}%)" if val_nme is not None else "no val record)"))
     say(f"device: {device}  |  model: {model_size_mb(model):.2f} MB, "
         f"{sum(p.numel() for p in model.parameters()):,} params")
 
     data = load_cache_from_cfg(cfg, "test")
     say(f"test split: {data.crops.shape[0]} faces "
-        "(ground-truth-box crops — the standard WFLW protocol; the full "
+        "(ground-truth-box crops - the standard WFLW protocol; the full "
         "Haar-pipeline comparison is milestone 6)")
     pred = predict_all(model, data.crops, data.landmarks, cfg, device)
     gt = data.landmarks.astype(np.float64)
@@ -217,7 +216,7 @@ def main() -> int:
         else:
             say(f"  {label:<14} {e['n']:>5} {'n/a':>8} {'n/a':>9}")
 
-    say("\n=== 4. CPU inference time (this machine's CPU — relative use only) ===")
+    say("\n=== 4. CPU inference time (this machine's CPU - relative use only) ===")
     timing = cpu_timing(model, cfg)
     say(f"  forward only          : {timing['forward_ms_median']:.2f} ms/frame")
     say(f"  preprocess + forward  : {timing['preprocess_and_forward_ms_median']:.2f} ms/frame")
@@ -232,7 +231,7 @@ def main() -> int:
     np.save(out_dir / "nme_per_face.npy", nme)
     results = {
         "checkpoint": str(ckpt_path),
-        "checkpoint_epoch": int(ck.get("epoch", -1)),
+        "checkpoint_epoch": meta["epoch"],
         "n_test_faces": int(len(nme)),
         "overall": {"nme_pct_mean": float(100 * nme.mean()),
                     "nme_pct_median": float(100 * np.median(nme)),
@@ -262,7 +261,7 @@ def _synthetic_pipeline(cfg: dict) -> dict:
 
     print("=" * 70)
     print("SYNTHETIC MODE: schematic faces + a briefly trained model.")
-    print("Code smoke test only — numbers are meaningless.")
+    print("Code smoke test only - numbers are meaningless.")
     print("=" * 70)
     tmp = Path(tempfile.mkdtemp(prefix="m5_synth_"))
     root = write_synthetic_dataset(tmp / "ds", require(cfg, "dataset.attribute_names"),

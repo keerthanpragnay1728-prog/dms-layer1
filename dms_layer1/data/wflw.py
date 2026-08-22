@@ -57,7 +57,7 @@ def _listing(path: Path, limit: int = 20) -> str:
 def _find_candidates(root: Path, target_name: str) -> list[Path]:
     """Look up to two levels below root for a directory with the expected
     name, purely to make the error message actionable. We never silently use
-    a candidate — the config must be fixed explicitly."""
+    a candidate - the config must be fixed explicitly."""
     hits = []
     if root.is_dir():
         for level1 in root.iterdir():

@@ -67,7 +67,7 @@ def test_extract_resizes_small_and_large():
 
 def test_point_round_trip_within_a_pixel():
     """Milestone-3 requirement: a point mapped to crop space and back lands
-    within a pixel of where it started — verified through the coordinate
+    within a pixel of where it started - verified through the coordinate
     algebra (exact) AND through actual image content (a marker survives
     extract_square + resize and maps back to its origin), which would catch
     any off-by-one or axis swap in the extraction that pure algebra cannot."""

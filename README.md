@@ -1,197 +1,146 @@
-# dms-layer1 — Facial Landmark Perception
+# dms-layer1
 
-Layer 1 of a three-layer driver monitoring system: face detection (Haar
-cascade) followed by a 24-point landmark model. The headline experiment is an
-ablation — our small from-scratch landmark model vs MediaPipe Face Mesh,
-feeding an **identical** downstream pipeline — so the landmark source is
-swappable behind one interface and everything downstream is blind to which
-front-end produced the coordinates.
+Facial landmark perception for a driver monitoring system. This repo is
+Layer 1 of a three layer design: a Haar cascade finds the face, a small CNN
+predicts 24 landmarks inside the face box. Layer 2 (eye aspect ratio, mouth
+aspect ratio, head pose, gaze) and Layer 3 (PERCLOS, microsleep timing,
+glance duration) are separate and not part of this repo.
 
-* Layer 1 (this repo): face detection + 24 landmarks per frame
-* Layer 2 (not here): EAR, MAR, head pose, gaze, eye-state CNN
-* Layer 3 (not here): PERCLOS, microsleep timing, glance duration, state machine
+The main experiment of the project is an ablation. We train our own landmark
+model and compare it against MediaPipe Face Mesh, with both feeding the same
+downstream pipeline. For that to be a fair comparison the landmark source
+has to be swappable behind one interface, and nothing downstream is allowed
+to know which detector produced the coordinates. The code is structured
+around that requirement.
 
-## The 24-point schema
+## The 24 point schema
 
-Defined once in [`configs/landmarks_24.yaml`](configs/landmarks_24.yaml) — the
-single source of truth for point identities, the WFLW 98→24 index mapping, and
-the horizontal-flip permutation. Groups:
+The point set is defined once, in
+[`configs/landmarks_24.yaml`](configs/landmarks_24.yaml). That file is the
+single source of truth for point identities, the WFLW 98 to 24 index
+mapping, and the horizontal flip permutation.
 
-| group   | ours  | purpose                    | WFLW sources                         |
-|---------|-------|----------------------------|--------------------------------------|
-| eyelids | 0–11  | eye aspect ratio           | 60,61,63,64,65,67 / 68,69,71,72,73,75 |
-| pupils  | 12–13 | gaze direction             | 96 / 97                              |
-| mouth   | 14–17 | mouth aspect ratio, yawn   | 76, 82, 79, 85 (outer lip)           |
-| axis    | 18–19 | head pitch                 | 54 (nose tip), 16 (chin)             |
-| contour | 20–23 | head yaw                   | 4, 8, 28, 24 (symmetric pairs)       |
+| group   | ours  | used for                 | WFLW sources                          |
+|---------|-------|--------------------------|---------------------------------------|
+| eyelids | 0-11  | eye aspect ratio         | 60,61,63,64,65,67 / 68,69,71,72,73,75 |
+| pupils  | 12-13 | gaze direction           | 96 / 97                               |
+| mouth   | 14-17 | mouth aspect ratio, yawn | 76, 82, 79, 85 (outer lip)            |
+| axis    | 18-19 | head pitch               | 54 (nose tip), 16 (chin)              |
+| contour | 20-23 | head yaw                 | 4, 8, 28, 24 (symmetric pairs)        |
 
-Conventions (documented in the schema file, enforced by tests):
+Conventions, all enforced by tests:
 
-* **left/right are image space** — "left" = viewer's left = subject's right.
-  (WFLW's own readme names index 96 "right pupil" in the subject frame; that
-  is the same physical point as our `left_pupil`.)
-* Each eye is the canonical 6-point EAR arrangement
-  `[corner, upper, upper, corner, lower, lower]`:
-  `EAR = (|p1−p5| + |p2−p4|) / (2·|p0−p3|)` on local offsets, identical for
-  both eyes. `MAR = |ours16−ours17| / |ours14−ours15|`.
-* NME is normalised by inter-ocular distance (outer eye corners, ours 0 and 9).
+* "left" and "right" mean image space, so our left is the viewer's left and
+  the subject's right. WFLW's readme names index 96 the "right pupil" in the
+  subject frame; that is the same physical point as our `left_pupil`.
+* Each eye is stored in the standard six point arrangement for the eye
+  aspect ratio: corner, upper, upper, corner, lower, lower. With local
+  offsets p0..p5, EAR = (|p1-p5| + |p2-p4|) / (2*|p0-p3|), and the formula
+  is the same for both eyes. MAR = |ours16-ours17| / |ours14-ours15|.
+* NME is normalised by the distance between the outer eye corners, our
+  points 0 and 9.
 
 ## Milestones
 
-1. **(closed)** Scaffolding, config system, WFLW loader, 98→24 mapping,
-   verification overlays. Mapping confirmed correct against the real
-   annotation file — see [docs/milestone1_verdict.md](docs/milestone1_verdict.md).
-2. **(closed)** Crop cache (one-time preprocess to a uint8 array +
-   crop-space labels). Verified on real WFLW: 7,500 + 2,500 faces, label
-   round-trip 0.00005 px, previews confirmed. The cache is attached to
-   training notebooks read-only via `cache.dir` in the config.
-3. **(closed)** Haar face detection wrapper + crop/resize/coordinate
-   round-trip (with test). Verified on real WFLW; findings and the pose
-   detection problem in [docs/milestone3_notes.md](docs/milestone3_notes.md);
-   `scripts/sweep_haar_pose.py` measures the tuning/profile-fallback options.
-4. **(closed)** Model, training loop, augmentation (flip-index unit test),
-   checkpointing, epoch-level resume, CSV metrics. Baseline (L2) trained on
-   T4: best val NME 7.285% @ epoch 99, 3.3 s/epoch, converged —
-   [docs/milestone4_notes.md](docs/milestone4_notes.md).
-5. **(current)** Evaluation: NME overall / per group / per WFLW subset,
-   failure rate @10%, model size, CPU inference time.
-6. `LandmarkDetector` interface + our implementation + MediaPipe mapped to the
-   same 24 semantics.
-7. Frame-to-frame stability harness comparing both detectors (landmark and
-   EAR standard deviation on a still face).
+1. Done. Repo scaffolding, config system, WFLW loader, the 98 to 24
+   mapping, and the verification overlays. The mapping was checked
+   statistically against the real annotation file and confirmed by eye.
+   See [docs/milestone1_verdict.md](docs/milestone1_verdict.md).
+2. Done. Crop cache. Verified on real WFLW: 7,500 train and 2,500 test
+   faces, label round trip error 0.00005 px, 167 MB total.
+3. Done. Haar face detection with a calibrated mapping from the raw Haar
+   box to the model's crop box. Findings, the pose detection problem, and
+   the tuning that followed are in
+   [docs/milestone3_notes.md](docs/milestone3_notes.md).
+4. Done. Model, training loop, augmentation, checkpointing and resume.
+   The Wing loss run is the baseline: best val NME 5.386% at epoch 113.
+   See [docs/milestone4_notes.md](docs/milestone4_notes.md).
+5. In progress. Test set evaluation: NME overall, per landmark group, per
+   WFLW subset, failure rate at 10%, model size, CPU timing.
+6. Planned. The `LandmarkDetector` interface with two implementations,
+   ours and MediaPipe mapped to the same 24 points.
+7. Planned. The frame to frame stability harness comparing both.
 
-## Milestone 1 verification (run on Kaggle, where WFLW is attached)
+## Running things
 
-Open `notebooks/kaggle_milestone1.ipynb` in Kaggle with the WFLW dataset
-attached, or run in any environment with the dataset:
+Everything runs from configs, no hardcoded paths. All the heavy work
+happens on Kaggle where the WFLW dataset and the crop cache are attached as
+inputs; the notebooks in `notebooks/` are thin wrappers that clone this
+repo, print the commit they are on, and call the scripts. Development and
+tests run locally on CPU.
+
+Milestone 1, mapping verification:
 
 ```bash
-pip install -r requirements.txt
-python tests/run_tests.py                                        # unit tests
 python scripts/verify_layout.py --config configs/layer1_base.yaml --split test
 python scripts/visualize_mapping.py --config configs/layer1_base.yaml --split test
 ```
 
-`verify_layout.py` checks the assumed WFLW index layout statistically against
-the real annotation file (e.g. point 96 must lie inside the 60–67 eye polygon
-on ~100% of faces). `visualize_mapping.py` writes labelled overlays — main
-panel plus zoomed eye/mouth insets with a crosshair through each pupil point —
-for frontal, large-pose and occluded samples, and a contact sheet. The
-checklist to confirm by eye is in that script's docstring.
-
-The dataset root lives in `configs/layer1_base.yaml` under `dataset.root`
-(default: the Kaggle mount). The loader fails with a listing of what it found
-if the path is wrong — it never guesses silently.
-
-## Milestone 2: crop cache
-
-`notebooks/kaggle_milestone2.ipynb`, or directly:
+Milestone 2, build the crop cache (decodes every image once, writes uint8
+crops plus crop space labels, checks its own output, renders previews):
 
 ```bash
 python scripts/build_crop_cache.py --config configs/layer1_base.yaml --split both
 ```
 
-One-time preprocess (every image decoded exactly once): square grayscale
-crops around each face's 98-point extent (`preprocess.crop_expand`), resized
-to `preprocess.cache_size`, stored per split as parallel `.npy` arrays with
-[0,1] crop-space labels for our 24 points, the crop boxes (for mapping back
-to frame coordinates), and the attribute flags (for per-subset evaluation).
-The script verifies its own output: read-back plus a label round-trip against
-a fresh parse of the annotations (float32 rounding only), and renders preview
-grids for an eyeball check. The cache is attached to later notebooks as a
-read-only input (`cache.dir` in the config points at the mount — a published
-dataset or a committed notebook's output); training (milestone 4) loads it
-fully into RAM and augments on the fly.
-
-## Milestone 3: Haar face-detection front-end
-
-`notebooks/kaggle_milestone3.ipynb`, or directly:
+Milestone 3, detector verification and the pose sweep:
 
 ```bash
 python scripts/verify_haar_pipeline.py --config configs/layer1_base.yaml --split test
+python scripts/sweep_haar_pose.py --config configs/layer1_base.yaml --split test
 ```
 
-`dms_layer1/detect/haar.py` wraps the OpenCV cascade (the XML is vendored in
-`assets/` — OpenCV 5.x wheels dropped both the cascade API and the data
-files, so `opencv-python` is pinned `<5` and the file is pinned in-repo) and
-maps a raw Haar box to the model's crop box via two calibrated config values
-(`face_detector.box_scale`, `box_shift_y`). The verification script measures
-that calibration against ground truth on real WFLW, reports detection rates
-overall and per subset, landmark containment, the exact coordinate
-round-trip, and CPU timing, and renders matched/missed previews. Crop
-extraction and coordinate mapping reuse `data/crops.py`, so the detector and
-the training cache cannot disagree on the transform (unit-tested, including
-an image-content round-trip within one pixel).
-
-## Milestone 4: training
-
-`notebooks/kaggle_milestone4_train.ipynb`, or directly:
+Milestone 4, training. Checkpoints are written every epoch and carry
+optimiser, scheduler and RNG state, so `--resume` continues a killed run
+exactly where it stopped (`tests/test_resume.py` proves the resumed metrics
+match an uninterrupted run). Metrics append to a CSV each epoch and the
+loss curves render to a PNG, which stands in for TensorBoard without adding
+a dependency.
 
 ```bash
-python train.py --config configs/layer1_base.yaml           # fresh run
-python train.py --config configs/layer1_base.yaml --resume  # continue one
+python train.py --config configs/layer1_base.yaml
+python train.py --config configs/layer1_base.yaml --resume
 ```
 
-`LandmarkNet` (`dms_layer1/model/net.py`): a small conv-BN-ReLU stack,
-trained from random initialisation (no pretrained weights, by design),
-~0.59 M params / ~2.4 MB fp32 at width 32 — well under the 5 MB budget.
-Output is 24 (x, y) pairs in [0, 1] crop coordinates from a single linear
-layer, bias-initialised to the crop centre. Loss is selectable in the config
-(`train.loss: l2 | wing`). Augmentation runs on the fly over the RAM cache —
-flip (with the landmark index remap, unit-tested), rotation, scale,
-translation, brightness/contrast, blur — as one affine shared by image and
-labels, with per-sample RNG seeded from (seed, epoch, index) so runs are
-reproducible by construction.
-
-Session survival: a kill-safe checkpoint every epoch carrying optimiser,
-scheduler, epoch counter, early-stop state and python/numpy/torch RNG;
-metrics append to a CSV after every epoch; loss/NME curves re-render to a
-PNG each epoch (the "TensorBoard or equivalent" — no extra dependency).
-`tests/test_resume.py` proves a stopped-and-resumed run reproduces an
-uninterrupted one row-for-row, and that a death between the CSV write and
-the checkpoint save cannot duplicate rows. `train.stop_after_epochs` gives a
-clean stop ahead of Kaggle's session cap. Validation is a seeded 10% split
-of the train cache (WFLW has no subject IDs, so a random face split is the
-only option; the subject-independence concern applies to the later in-cabin
-recordings, not WFLW); early stopping tracks val NME (inter-ocular).
-
-## Milestone 5: evaluation
-
-`notebooks/kaggle_milestone5_eval.ipynb`, or directly:
+Milestone 5, evaluation on the test set, plus the export step that strips a
+checkpoint down to deployable weights:
 
 ```bash
 python scripts/evaluate.py --config configs/layer1_base.yaml --checkpoint <path>/best.pth
+python scripts/export_weights.py --config configs/layer1_base.yaml \
+    --checkpoint <path>/best.pth --out landmarks24.pt
 ```
 
-Reports on the WFLW test split (ground-truth-box crops — the standard
-protocol, so landmark quality is not confounded by the face detector):
-overall NME, NME per landmark group (pupil error matters far more than
-contour error, and the overall average hides it), NME + failure rate per
-WFLW subset, failure rate @ NME > 10%, model size, and CPU per-frame
-inference time (labelled machine-relative). Writes `m5_results.yaml`, the
-per-face NME array (kept for the milestone-6 ablation statistics), a
-worst-12 render (prediction vs ground truth), and the config snapshot.
+Most scripts also take `--synthetic`, which runs them on generated
+schematic faces. That exists so the code paths can be exercised on a
+machine without the dataset. It is clearly labelled in the output and is
+not a substitute for the real runs.
 
-Local smoke test without the dataset (schematic faces, code-path check only,
-loudly labelled as such): add `--synthetic` to either script.
+## Reproducibility notes
 
-## Repo layout
+The global seed lives in the config (`seed: 42`) and feeds sampling,
+augmentation and training. Every script that writes results also writes a
+`config_used.yaml` next to them, so any number can be traced back to the
+settings that produced it. The notebooks print the git commit they run
+from. The landmark model trains from random initialisation; not using
+pretrained weights is part of the project's argument, not an oversight.
+
+Two practical notes. WFLW has no subject IDs, so the validation split is a
+seeded random split of faces; the subject independence concern applies to
+the later in-cabin recordings, not to WFLW. And `opencv-python` is pinned
+below version 5 because OpenCV 5 removed the Haar cascade API this project
+depends on; the cascade XML files are vendored in `assets/` since even 4.x
+wheels do not always ship them.
+
+## Layout
 
 ```
-configs/            layer1_base.yaml (all knobs), landmarks_24.yaml (schema)
-dms_layer1/         package: config, landmarks/schema, data/wflw, viz/overlay
-scripts/            verify_layout.py, visualize_mapping.py
-tests/              run_tests.py (no pytest needed; pytest-compatible files)
-notebooks/          thin Kaggle notebooks (clone repo, run scripts)
+configs/      layer1_base.yaml (all settings), landmarks_24.yaml (point schema)
+dms_layer1/   the package: data loading, crops, cache, detector, model,
+              training, evaluation, visualisation
+scripts/      one script per verification or build step
+tests/        python tests/run_tests.py (plain python, pytest compatible)
+notebooks/    thin Kaggle notebooks, one per milestone
+assets/       vendored OpenCV cascade files
+docs/         milestone records with the numbers cited in the report
 ```
-
-## Reproducibility
-
-* Global seed in the config (`seed: 42`), used for sampling everywhere;
-  torch seeding joins in milestone 4.
-* Every script that writes outputs also writes `config_used.yaml` next to
-  them, so any reported number can be reconstructed.
-* No pretrained weights for the landmark model — training from random
-  initialisation is a deliberate part of the contribution.
-* Dependencies are pinned to the agreed set in `requirements.txt`; nothing
-  gets added without discussion.

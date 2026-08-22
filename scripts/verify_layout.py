@@ -3,7 +3,7 @@
 annotation file, BEFORE trusting the 98->24 mapping.
 
 Runs geometric sanity checks that must hold if (and only if) the documented
-index layout is correct — e.g. "point 96 lies inside the polygon of points
+index layout is correct - e.g. "point 96 lies inside the polygon of points
 60-67" can only pass if 96 really is the pupil of that eye. Checks sensitive
 to head pose are evaluated on the frontal subset (pose flag == 0); each check
 reports the fraction of faces satisfying it.
@@ -42,7 +42,7 @@ def run_checks(records: list[wflw.FaceRecord]) -> list[tuple]:
     """Vertical/horizontal relations are evaluated in a FACE-ALIGNED frame so
     in-plane roll cannot fail them: u = unit vector from the 60-67 eye
     centroid to the 68-75 eye centroid, v = u rotated 90 deg (down the face).
-    That frame presumes 60-67/68-75 are the eyes — which the frame-free
+    That frame presumes 60-67/68-75 are the eyes - which the frame-free
     checks (pupil containment, image-left/right ordering) validate first."""
     lm = np.stack([r.landmarks98 for r in records])          # (N, 98, 2)
     frontal = np.array([r.attributes["pose"] == 0 for r in records])
@@ -117,7 +117,7 @@ def run_checks(records: list[wflw.FaceRecord]) -> list[tuple]:
           & (across(76) < across(85)) & (across(85) < across(82)),
           results, "frontal")
 
-    # Eyebrows (33-50) sit above the eyes — confirms 33-50 aren't lips etc.
+    # Eyebrows (33-50) sit above the eyes - confirms 33-50 aren't lips etc.
     check("33-50 above eye region (eyebrows)",
           down(slice(33, 51)).mean(axis=1) < 0, results, "frontal")
 
@@ -181,7 +181,7 @@ def main() -> int:
         print("All layout assumptions hold. The 98->24 mapping indices are safe "
               "to verify visually next (scripts/visualize_mapping.py).")
         return 0
-    print(f"Result: {worst} — inspect the failing checks before trusting the mapping.")
+    print(f"Result: {worst} - inspect the failing checks before trusting the mapping.")
     return 1 if worst == "FAIL" else 0
 
 

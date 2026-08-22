@@ -6,7 +6,7 @@ can be separated from "mapping error" BEFORE anything about the mapping moves.
 
 Sections:
   0. Reproduction of the four checks with the exact verify_layout thresholds
-     (shared code) — these numbers must match your verify_layout run.
+     (shared code) - these numbers must match your verify_layout run.
   1. Chin: on failing faces, WHICH contour index is lowest and by how many
      pixels (also normalised by inter-ocular distance); pass rates under
      IOD-relative tolerances. A sub-percent margin at index 15/17 is a tie.
@@ -83,7 +83,7 @@ def main() -> int:
     if args.synthetic:
         import tempfile
         from dms_layer1.data.synthetic import write_synthetic_dataset
-        say("SYNTHETIC MODE: schematic faces — smoke test of the code path only.")
+        say("SYNTHETIC MODE: schematic faces - smoke test of the code path only.")
         root = write_synthetic_dataset(tempfile.mkdtemp(prefix="wflw_synth_"),
                                        require(cfg, "dataset.attribute_names"),
                                        seed=require(cfg, "seed"))

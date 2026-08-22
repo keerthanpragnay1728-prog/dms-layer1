@@ -3,7 +3,7 @@
 
     python train.py --config configs/layer1_base.yaml
 
-Everything — data location, model, loss, schedule, checkpoints, resume — is
+Everything - data location, model, loss, schedule, checkpoints, resume - is
 in the config. To continue an interrupted run, set train.resume: true (or
 pass --resume) and run the same command; the checkpoint restores optimiser,
 scheduler, epoch counter and RNG state, so the continuation is identical to

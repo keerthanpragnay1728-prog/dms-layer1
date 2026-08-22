@@ -7,8 +7,8 @@ pixel meaning from the paper and makes L2 magnitudes interpretable).
 Wing loss (Feng et al., CVPR 2018), element-wise on coordinate errors:
     wing(x) = w * ln(1 + |x|/eps)   if |x| < w
               |x| - C               otherwise,  C = w - w*ln(1 + w/eps)
-It behaves like a scaled log near zero — amplifying the small errors that
-dominate the end of landmark training — and like L1 for large errors.
+It behaves like a scaled log near zero - amplifying the small errors that
+dominate the end of landmark training - and like L1 for large errors.
 """
 
 from __future__ import annotations
@@ -40,4 +40,4 @@ def make_loss(cfg: dict):
         w = float(require(cfg, "train.wing.w"))
         eps = float(require(cfg, "train.wing.epsilon"))
         return lambda p, t: wing_loss(p * input_size, t * input_size, w, eps)
-    raise ValueError(f"Unknown train.loss '{kind}' — expected 'l2' or 'wing'")
+    raise ValueError(f"Unknown train.loss '{kind}' - expected 'l2' or 'wing'")

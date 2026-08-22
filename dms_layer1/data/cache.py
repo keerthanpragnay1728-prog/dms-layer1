@@ -11,7 +11,7 @@ Each split becomes a set of parallel arrays, index-aligned per face:
     {split}_manifest.yaml  build stats + settings (plus config_used.yaml)
 
 The crop box is a square around the extent of ALL 98 annotated points (not
-just our 24 — that keeps forehead/brow context, closer to what a face
+just our 24 - that keeps forehead/brow context, closer to what a face
 detector box contains), expanded by preprocess.crop_expand. Landmarks are
 stored resolution-independent in [0,1] over the box, so the same cache
 serves any model input size. The training loop (milestone 4) loads these
@@ -101,7 +101,7 @@ def build_cache(cfg: dict, split: str, out_dir: str | Path | None = None) -> dic
                 raise CacheError(
                     f"landmarks outside the crop for {rec.image_rel_path} "
                     f"(line {rec.line_number}): range [{lm01.min():.3f}, "
-                    f"{lm01.max():.3f}] — this cannot happen with a box built "
+                    f"{lm01.max():.3f}] - this cannot happen with a box built "
                     "from all 98 points; the annotation or box code is broken"
                 )
             landmarks[i] = lm01.astype(np.float32)
@@ -242,5 +242,5 @@ def load_cache(cache_dir: str | Path, split: str) -> CacheData:
     if crops.dtype != np.uint8 or landmarks.dtype != np.float32:
         raise CacheError(f"Unexpected dtypes: crops {crops.dtype}, landmarks {landmarks.dtype}")
     if landmarks.min() < 0.0 or landmarks.max() > 1.0:
-        raise CacheError("Cached landmarks outside [0, 1] — cache is corrupt")
+        raise CacheError("Cached landmarks outside [0, 1] - cache is corrupt")
     return CacheData(crops, landmarks, boxes, attrs, rel_paths, manifest)

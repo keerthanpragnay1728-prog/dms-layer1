@@ -2,14 +2,14 @@
 detector comparison and the milestone-7 stability harness.
 
 All functions take numpy arrays of predicted and ground-truth landmarks in
-the SAME coordinate space — [0, 1] crop space or pixels, it does not matter,
+the SAME coordinate space - [0, 1] crop space or pixels, it does not matter,
 because every reported number is normalised by the inter-ocular distance
 (outer eye corners) measured from the ground truth in that same space.
 
 Definitions:
   * per-face NME: mean over the 24 points of the Euclidean point error,
     divided by the face's inter-ocular distance (in percent when printed).
-  * per-group NME: the same, averaged over one group's points only —
+  * per-group NME: the same, averaged over one group's points only -
     reported separately because pupil error matters far more than contour
     error for this pipeline, and an overall average hides that.
   * failure rate: fraction of faces with per-face NME above a threshold

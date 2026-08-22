@@ -7,7 +7,7 @@ writes one labelled overlay PNG per face plus a contact sheet, prints the
 mapping table, and snapshots the config + table into the output directory.
 
 What to confirm on the overlays (from the milestone definition):
-  * pupil points (12, 13) dead centre in each eye — crosshair in the insets
+  * pupil points (12, 13) dead centre in each eye - crosshair in the insets
   * eyelid points 0-5 / 6-11 trace the lids, consistent order
   * mouth points 14-17 on corners and outer-lip midpoints
   * nose tip 18 and chin 19 on the vertical facial axis

@@ -7,7 +7,7 @@ For each requested split this script:
      crop-space [0,1] labels for our 24 points),
   2. reloads the written files (read-back check),
   3. reconstructs every face's landmarks from the cached [0,1] labels + crop
-     box and compares them against a fresh parse of the annotation file —
+     box and compares them against a fresh parse of the annotation file -
      proving the cache encodes the labels faithfully (max error is float32
      rounding, well under 0.01 px),
   4. renders a preview grid of decoded crops with the cached points drawn on
@@ -96,7 +96,7 @@ def main() -> int:
     if args.synthetic:
         import tempfile
         from dms_layer1.data.synthetic import write_synthetic_dataset
-        print("SYNTHETIC MODE: schematic faces — smoke test of the code path only.")
+        print("SYNTHETIC MODE: schematic faces - smoke test of the code path only.")
         root = write_synthetic_dataset(tempfile.mkdtemp(prefix="wflw_synth_"),
                                        require(cfg, "dataset.attribute_names"),
                                        seed=require(cfg, "seed"))
@@ -125,7 +125,7 @@ def main() -> int:
         print(f"  read-back OK; label round-trip max error {err:.5f} px "
               f"(float32 rounding only)")
         if err > 0.01:
-            print("  ERROR: round-trip error exceeds 0.01 px — cache labels "
+            print("  ERROR: round-trip error exceeds 0.01 px - cache labels "
                   "do not faithfully encode the annotations. Do not train on this.")
             return 1
 

@@ -1,7 +1,7 @@
 """The landmark regression network (milestone 4).
 
 A deliberately small convolutional stack trained from random initialisation
-— no pretrained weights, by project design. Input is a grayscale face crop;
+- no pretrained weights, by project design. Input is a grayscale face crop;
 output is 24 (x, y) pairs in [0, 1] crop coordinates, regressed directly by
 a single linear layer.
 
@@ -13,7 +13,7 @@ Architecture (width = w, default 32):
     head  : flatten -> linear -> 48
 
 Every conv is conv-BN-ReLU. At width 32 and input 112 this is ~0.59M
-parameters, ~2.4 MB in fp32 — comfortably under the 5 MB budget. The final
+parameters, ~2.4 MB in fp32 - comfortably under the 5 MB budget. The final
 layer's bias is initialised to 0.5 so the untrained model predicts the crop
 centre instead of random scatter.
 """
@@ -39,6 +39,10 @@ class LandmarkNet(nn.Module):
             raise ValueError(f"input_size must be divisible by 16, got {input_size}")
         w = width
         self.num_points = num_points
+        # self-description, embedded in checkpoints and exports so weights
+        # files can be loaded without knowing the training config
+        self.arch = {"num_points": num_points, "width": width,
+                     "input_size": input_size}
         self.features = nn.Sequential(
             _conv_bn_relu(1, w // 2, stride=2),
             _conv_bn_relu(w // 2, w),
