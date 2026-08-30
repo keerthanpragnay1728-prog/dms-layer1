@@ -66,6 +66,18 @@ optimises the wrong thing; the calibration is now chosen on end NME by
 `scripts/diagnose_deploy_gap.py` section 3, after the model has been
 retrained to tolerate the framing range.
 
+**Second correction, and the original instinct comes out ahead.** The table
+above was measured on a single-stage path with the pre-framing model. With
+two stages and the framing-aware model, the calibration grid picks
+box_scale 1.60 with no vertical shift: a wide containing box that scores
+16.488% on its own and 9.879% after refinement, against a well-framed
+(1.30, 0.11) box that scores 10.820% on its own and loses end to end.
+Containment was the right criterion for the wrong stage. It fails as a
+target for a single pass, because a contained face can still be framed
+unreadably; it succeeds for stage 1 of a two-stage pipeline, because a point
+outside the crop cannot be recovered later while a badly framed one can.
+Full grid and the mechanism in `docs/milestone6_findings.md`.
+
 ## Final: any-box detection at the shipped settings (1.05, 2, 0.08)
 
 Verifier re-run at commit `dcbe062`, clone provenance confirmed. Every

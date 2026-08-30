@@ -89,19 +89,27 @@ face_detector:
   min_size_frac: 0.08  # min face side as a fraction of min(image h, w)
   equalize_hist: true  # histogram-equalise before detection
   # Calibration from a raw Haar box to the model's crop box: side =
-  # max(w, h) * box_scale, centre shifted down by box_shift_y * side. Chosen
-  # on END NME against the framing-aware model, not on containment (which
-  # inverts; see docs/milestone6_findings.md). That model is flat from 1.12
-  # to 1.45 within 0.5 NME points, so 1.30 is the CENTRE of the flat region
-  # rather than its edge: per-face variation in the Haar-to-face ratio then
-  # moves along the flat part instead of off a cliff.
-  box_scale: 1.30
-  box_shift_y: 0.13
-  # Horizontal offset, same units. Zero until milestone 6 section 5b measures
-  # it: the residual decomposition showed centre error costs about 3.9 NME
-  # points against 0.3 for size, and a Haar box is not necessarily centred on
-  # the face horizontally either. calibrate_haar_to_crop has reported this
-  # number since milestone 3; the transform could not apply it until now.
+  # max(w, h) * box_scale, centre offset by (box_shift_x, box_shift_y) * side.
+  #
+  # Chosen on END-TO-END NME with refinement on, not on stage-1 NME, and the
+  # two disagree sharply. Stage 1 alone prefers (1.30, 0.11) at 10.820%;
+  # end to end, (1.60, 0.00) wins at 9.879% while scoring 16.488% at stage 1,
+  # nearly the worst box in the grid. A wide, deliberately un-shifted box
+  # contains the face reliably, and stage 2 rebuilds a well-framed box from
+  # the points found inside it. The stage-1 box and refinement are ONE
+  # decision; optimising the first alone leaves about a point on the table.
+  # Ceiling on the same faces is 7.187%. Grid and reasoning in
+  # docs/milestone6_findings.md.
+  box_scale: 1.60
+  box_shift_y: 0.00
+  # Horizontal offset, same units. MEASURED AND REJECTED, not left at zero by
+  # default: section 5b puts the horizontal bias at +0.0008 of a box side on
+  # frontal faces against +0.0271 on pose-flagged ones (n=11), so it exists
+  # only with pose and is not a constant a single parameter can remove. The
+  # sweep agrees: 0.00 is optimal at 10.820%, against 10.990% at -0.03 and
+  # 10.929% at +0.03. The parameter stays because the transform should be
+  # able to express the offset the calibration report has always measured;
+  # the value stays at zero because the data says so.
   box_shift_x: 0.00
   match_iou: 0.30      # Haar box <-> annotated face matching threshold
   # Which detection to track when the cascade returns several. Milestone 6
@@ -168,10 +176,11 @@ train:
 detector:
   # Refinement stages: 1 disables refinement; 2 predicts from the calibrated
   # Haar box, rebuilds a canonical box from those points, and predicts again.
-  # Milestone 6 measured refinement as near worthless from a bad stage-1 box
-  # (29.0 -> 25.2 against a 7.8 ceiling) and worth 3.7 points once the model
-  # tolerates the framing (16.3 -> 12.6). Which stage-1 calibration pairs
-  # best with it is measured by diagnose_deploy_gap.py section 4.
+  # It is not a polish step, it is what makes the pipeline work: at the
+  # shipped calibration it is worth 6.609 NME points (16.488% at stage 1 to
+  # 9.879% after stage 2), because stage 1 is deliberately a wide containing
+  # box rather than a well-framed one. A third stage gives 9.753%, so the
+  # process has converged at two and the extra pass is not worth its latency.
   refine_stages: 2
   # Framing of the rebuilt box, in the same units as
   # preprocess.reference_expand. 1.60 from two independent measurements on the

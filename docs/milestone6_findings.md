@@ -798,3 +798,81 @@ settings.
 The baseline is now stored with the settings that produced it, and the gate
 prints the current settings, says whether they match, and explains what to
 compare against when they do not. A bare number is not a gate.
+
+## The shipped calibration, and why stage 1 is deliberately a bad box
+
+Final settings, all chosen on measurements in this document:
+
+| setting | value | chosen on |
+|---------|-------|-----------|
+| box_scale | 1.60 | end-to-end NME with refinement on |
+| box_shift_y | 0.00 | the same grid |
+| box_shift_x | 0.00 | measured and rejected, see below |
+| refine_stages | 2 | +6.609 points; a third stage adds 0.126 |
+| refine_expand | 1.60 | the section-4 sweep and section 6 agree |
+| cross_expand | 1.60 | section 6, same 24-point box construction |
+
+### Stage 1 and refinement are one decision, demonstrated
+
+| criterion | winner | stage-1 NME | end-to-end NME |
+|-----------|--------|-------------|----------------|
+| best stage 1 | (1.30, 0.11) | 10.820% | |
+| best end to end | (1.60, 0.00) | 16.488% | 9.879% |
+| ceiling (ground-truth box) | | | 7.187% |
+
+The shipped stage-1 box is nearly the worst in the grid on its own. Choosing
+it by its own NME would pick (1.30, 0.11) and give up about a point end to
+end.
+
+The mechanism is containment. Stage 1's job is not to frame the face well, it
+is to contain the face reliably enough that the model can find roughly where
+the points are; stage 2 then rebuilds a properly framed box from those points
+and does the accurate work. A wide box with no downward shift contains more
+faces; a tight, well-centred box crops parts of some faces, and a point
+outside the crop cannot be recovered at any later stage.
+
+That resolves the containment inversion from earlier in this document rather
+than contradicting it. Containment was measured against a single-stage path
+and inverted against end NME there, correctly. With a second stage in the
+pipeline the wide containing box is exactly what wins, so the milestone-3
+instinct was right about the criterion and wrong about which stage it applies
+to. Choose stage 1 on containment-like properties only because stage 2
+exists, and verify on end-to-end NME either way.
+
+One caveat that belongs in the report next to this. A configuration that is
+optimal in the mean while being nearly worst at stage 1 depends on refinement
+working. If stage 1 ever scatters its points badly, the fallback is a 16.5%
+box rather than a 10.8% one. For a driver monitoring system the tail matters
+more than the mean, so the calibration grid now reports failure rate at the
+configured threshold beside the mean and median, and the comparison between
+the two candidate settings should be read on that column too.
+
+### box_shift_x: measured and rejected
+
+The horizontal bias is +0.0008 of a box side on frontal faces against
++0.0271 on pose-flagged ones (n = 11). It exists only with pose, which is
+what a frontal cascade boxing the visible part of a turned head produces, so
+it is not a constant and no single parameter removes it. The sweep agrees:
+0.00 is optimal at 10.820%, against 10.990% at -0.03 and 10.929% at +0.03.
+
+The parameter stays in the transform, because `calibrate_haar_to_crop` has
+been measuring that offset since milestone 3 and a transform that cannot
+express what the calibration reports is a gap. The value stays at zero
+because the data says so. This is a measurement, not a default.
+
+### Calibration is nearly exhausted, and that is the finding
+
+Of the 3.920 NME points of centre error, 0.297 is removable by a constant
+transform and 3.380 is the Haar box landing somewhere different on each face.
+Bias over scatter is 0.03 horizontally and 0.47 vertically, both well under
+1: the systematic part is nearly gone and 86% of what remains is per-face
+variation.
+
+That is the honest ceiling on the classical front end, and it should be
+stated as one. No amount of calibration reaches it, because a constant
+transform has no per-face freedom. The only mechanism in the pipeline that
+responds per face is refinement, which is why it is worth 6.6 points here
+while being worthless from a well-centred box. Anything further requires a
+front end that localises the face per frame rather than a rectangle plus a
+fixed correction, which is precisely what the learned detector on the other
+side of the ablation does.

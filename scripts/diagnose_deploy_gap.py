@@ -265,7 +265,8 @@ def main() -> int:
     say("\n=== 3. Calibration grid on right-face images (face choice "
         "excluded), decided on END NME, not containment ===")
     say(f"  right-face images: {len(right_face)}")
-    say(f"  {'scale':>6} {'shift':>6} {'containment':>12} {'NME':>26}")
+    say(f"  {'scale':>6} {'shift':>6} {'containment':>12} {'NME':>26} "
+        f"{'fail@thr':>9}")
     grid_rows = []
 
     def grid_point(s: float, d: float, dx: float) -> dict:
@@ -275,10 +276,16 @@ def main() -> int:
             pts01_gt = (gt24[rel] - (box.x0, box.y0)) / box.side
             contained += bool(pts01_gt.min() >= 0 and pts01_gt.max() <= 1)
             vals.append(nme(run_model(grays[rel], box), gt24[rel]))
+        # failure rate as well as the mean: a driver monitoring system cares
+        # about the tail more than the average, and a configuration that wins
+        # on the mean can carry a heavier one
+        thr = float(require(cfg, "eval.failure_threshold"))
         return {"box_scale": s, "box_shift_y": d, "box_shift_x": dx,
                 "containment_pct": round(100 * contained / max(1, len(right_face)), 2),
                 "nme_pct_mean": round(100 * float(np.mean(vals)), 3) if vals else None,
                 "nme_pct_median": round(100 * float(np.median(vals)), 3) if vals else None,
+                "failure_pct": round(100 * float(np.mean(np.array(vals) > thr)), 2)
+                if vals else None,
                 "_vals": vals}
 
     for s in GRID_SCALES:
@@ -286,7 +293,7 @@ def main() -> int:
             row = grid_point(s, d, 0.0)
             grid_rows.append(row)
             say(f"  {s:>6.2f} {d:>6.2f} {row['containment_pct']:>11.2f}% "
-                f"{nme_stats(row['_vals']):>40}")
+                f"{nme_stats(row['_vals']):>40} {row['failure_pct']:>8.2f}%")
 
     # horizontal offset, swept at the best (scale, shift_y) above. Separable
     # to keep this a 1D pass rather than a third grid dimension: the axes act
@@ -300,7 +307,8 @@ def main() -> int:
     for dx in GRID_SHIFTS_X:
         row = grid_point(best_sy["box_scale"], best_sy["box_shift_y"], dx)
         grid_rows.append(row)
-        say(f"  {dx:>8.2f} {nme_stats(row['_vals']):>40}")
+        say(f"  {dx:>8.2f} {nme_stats(row['_vals']):>40} "
+            f"{row['failure_pct']:>8.2f}%")
     for r in grid_rows:
         r.pop("_vals", None)
 
