@@ -101,3 +101,106 @@ def crossing_rate(series: np.ndarray, threshold: float) -> float:
         return 0.0
     above = x > threshold
     return float(np.mean(above[1:] != above[:-1]))
+
+
+def split_jumps(values: np.ndarray, jump_threshold: float) -> dict:
+    """Separate a per-frame series into continuous wobble and discrete jumps.
+
+    A cascade detector does not drift smoothly. It searches a scale pyramid on
+    a grid and merges neighbours, so a small change in the image can flip
+    which candidate wins or which pyramid level it wins at, and the box moves
+    in a step rather than a slide. Averaging the two into one standard
+    deviation describes neither: a few large steps and constant small wobble
+    produce the same number and call for different fixes.
+
+    Returns the jump rate, and the spread of the frame-to-frame differences
+    with jumps excluded.
+    """
+    v = np.asarray(values, dtype=np.float64)
+    if len(v) < 2:
+        return {"jump_rate": 0.0, "continuous_sd": 0.0, "largest_jump": 0.0}
+    d = np.abs(np.diff(v, axis=0))
+    if d.ndim > 1:
+        d = np.linalg.norm(d, axis=1)
+    jumps = d > jump_threshold
+    # Measured on the DIFFERENCES, not on the values: a step leaves a
+    # permanent level change, so a standard deviation of positions counts
+    # every jump forever. For white wobble of size sigma the differences have
+    # spread sigma * sqrt(2), so dividing recovers the per-frame wobble.
+    calm = d[~jumps]
+    sd = float(np.sqrt((calm ** 2).mean()) / np.sqrt(2)) if calm.size else 0.0
+    return {"jump_rate": float(jumps.mean()), "continuous_sd": sd,
+            "largest_jump": float(d.max())}
+
+
+def gap_runs(valid: list[bool]) -> dict:
+    """Dropout structure, not just its rate.
+
+    A cabin loses a drowsiness estimate on every dropped frame, and losing 3%
+    of frames one at a time is a different failure from losing the same 3% in
+    one blackout. Layer 2 aggregates over a window, so what matters is the
+    longest gap relative to that window.
+    """
+    v = list(valid)
+    if not v:
+        return {"dropout": 1.0, "longest_gap": 0, "gaps": 0}
+    longest = run = gaps = 0
+    for ok in v:
+        if ok:
+            run = 0
+        else:
+            run += 1
+            if run == 1:
+                gaps += 1
+            longest = max(longest, run)
+    return {"dropout": float(1.0 - sum(v) / len(v)),
+            "longest_gap": int(longest), "gaps": int(gaps)}
+
+
+def threshold_margin(series: np.ndarray, threshold: float) -> float:
+    """How far a signal sits from a decision threshold, in units of its own
+    jitter.
+
+    Zero false crossings is a result about the sequences tested, not a
+    property of the system: a signal one standard deviation from the
+    threshold crosses often and a signal five away essentially never. This
+    turns the binary into the quantity that generalises.
+    """
+    x = np.asarray(series, dtype=np.float64)
+    sd = float(x.std())
+    if sd <= 1e-12:
+        return float("inf")
+    return float(abs(x.mean() - threshold) / sd)
+
+
+def rule_of_three(events: int, trials: int) -> float:
+    """Upper 95% bound on a rate when the count is zero.
+
+    Zero crossings in n frames does not mean the rate is zero, and a
+    drowsiness system running at 30 fps accumulates frames quickly. With no
+    events the bound is 3/n, which is the honest way to report a null.
+    """
+    if trials <= 0:
+        return float("nan")
+    if events > 0:
+        return float(events / trials)
+    return float(3.0 / trials)
+
+
+def sustained_crossing_rate(series: np.ndarray, threshold: float,
+                            min_frames: int = 3) -> float:
+    """Crossings a blink detector would act on: runs of at least `min_frames`
+    consecutive frames on the far side of the threshold, per frame.
+
+    A single frame below an EAR threshold is not a blink and no sensible
+    Layer 2 would treat it as one, so the raw crossing rate is a pessimistic
+    proxy. This is the one that corresponds to a decision.
+    """
+    x = np.asarray(series, dtype=np.float64)
+    below = x < threshold
+    runs, count, n = 0, 0, len(x)
+    for b in below:
+        count = count + 1 if b else 0
+        if count == min_frames:
+            runs += 1
+    return float(runs / max(n, 1))

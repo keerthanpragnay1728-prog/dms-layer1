@@ -25,8 +25,9 @@ contribution is measured separately with acquisition removed.
    face perfectly, in box-side units. Bias and jitter are reported
    separately: a box consistently offset is a calibration matter and only a
    box that moves reaches the landmarks as noise. The units are chosen so
-   this is directly comparable to the 0.0338 per-face scatter measured in
-   milestone 6 section 5b.
+   this is directly comparable to the across-faces centre scatter measured in
+   milestone 6 section 5b, which the harness reads from that run's YAML when
+   pointed at it rather than quoting a number from memory.
 2. **Model jitter.** Landmarks predicted in a per-frame ground-truth box, so
    acquisition is perfect and only the image changes. The model's own noise
    floor.
