@@ -59,8 +59,17 @@ from dms_layer1.model.io import describe_weights
 BOX24_EXPANDS = [1.30, 1.45, 1.60, 1.75, 1.90, 2.05]
 SCALE_CURVE = [1.0, 1.1, 1.2, 1.3, 1.4, 1.56, 1.7, 1.9]
 GRID_SCALES = [1.12, 1.30, 1.45, 1.60, 1.75]
-GRID_SHIFTS = [0.08, 0.13]
+# Centre, not scale, is where the residual lives (section 5), so the shift
+# axes are searched properly rather than sampled at the two values milestone 3
+# happened to try. Section 5b measures the bias first and this grid confirms
+# it on end NME.
+GRID_SHIFTS = [0.00, 0.04, 0.08, 0.11, 0.13, 0.16, 0.20]
+GRID_SHIFTS_X = [-0.06, -0.03, 0.00, 0.03, 0.06]
 REFINE_EXPANDS = [1.15, 1.30, 1.45, 1.60]
+# The milestone-3 any-box baseline, WITH the settings that produced it. A
+# bare number is not a gate: this one read as a regression when the only
+# change was min_neighbors 2 -> 5, adopted deliberately in c7ad69a.
+ANY_BOX_BASELINE = {"rate_pct": 72.08, "settings": (1.05, 2, 0.08)}
 _lines: list[str] = []
 
 
@@ -184,9 +193,26 @@ def main() -> int:
             if best >= match_iou:
                 taken.add(best_i)
                 per_face_hits += 1
+    sf = require(cfg, "face_detector.scale_factor")
+    nb = require(cfg, "face_detector.min_neighbors")
+    mf = require(cfg, "face_detector.min_size_frac")
     say(f"  any-box rate, ALL annotated faces (the milestone-3 definition): "
         f"{100 * per_face_hits / max(1, per_face_total):.2f}% "
-        f"({per_face_hits}/{per_face_total})  <- should reproduce 72.08%")
+        f"({per_face_hits}/{per_face_total})")
+    say(f"  this run: scale_factor {sf}, min_neighbors {nb}, "
+        f"min_size_frac {mf}")
+    if (sf, nb, mf) == ANY_BOX_BASELINE["settings"]:
+        say(f"  baseline at these settings: {ANY_BOX_BASELINE['rate_pct']}% "
+            "(milestone 3). A gap here is a real regression.")
+    else:
+        say(f"  NOTE: the {ANY_BOX_BASELINE['rate_pct']}% milestone-3 baseline "
+            f"was measured at {ANY_BOX_BASELINE['settings']}, not at these "
+            "settings, so this number is NOT expected to reproduce it. "
+            "min_neighbors was raised from 2 to 5 by the selection diagnostic, "
+            "which was a deliberate trade: fewer spurious boxes, and any-box "
+            "recall falls because there are fewer boxes to hit with. Compare "
+            "against the largest-box and confidence-selected rates below, "
+            "which are what deployment uses.")
 
     def largest_hits_target(rel) -> bool:
         boxes = haar_boxes[rel]
@@ -241,21 +267,42 @@ def main() -> int:
     say(f"  right-face images: {len(right_face)}")
     say(f"  {'scale':>6} {'shift':>6} {'containment':>12} {'NME':>26}")
     grid_rows = []
+
+    def grid_point(s: float, d: float, dx: float) -> dict:
+        vals, contained = [], 0
+        for rel in right_face:
+            box = haar_to_crop_box(haar_boxes[rel][0], s, d, dx)
+            pts01_gt = (gt24[rel] - (box.x0, box.y0)) / box.side
+            contained += bool(pts01_gt.min() >= 0 and pts01_gt.max() <= 1)
+            vals.append(nme(run_model(grays[rel], box), gt24[rel]))
+        return {"box_scale": s, "box_shift_y": d, "box_shift_x": dx,
+                "containment_pct": round(100 * contained / max(1, len(right_face)), 2),
+                "nme_pct_mean": round(100 * float(np.mean(vals)), 3) if vals else None,
+                "nme_pct_median": round(100 * float(np.median(vals)), 3) if vals else None,
+                "_vals": vals}
+
     for s in GRID_SCALES:
         for d in GRID_SHIFTS:
-            vals, contained = [], 0
-            for rel in right_face:
-                box = haar_to_crop_box(haar_boxes[rel][0], s, d)
-                pts01_gt = (gt24[rel] - (box.x0, box.y0)) / box.side
-                contained += bool(pts01_gt.min() >= 0 and pts01_gt.max() <= 1)
-                vals.append(nme(run_model(grays[rel], box), gt24[rel]))
-            row = {"box_scale": s, "box_shift_y": d,
-                   "containment_pct": round(100 * contained / max(1, len(right_face)), 2),
-                   "nme_pct_mean": round(100 * float(np.mean(vals)), 3) if vals else None,
-                   "nme_pct_median": round(100 * float(np.median(vals)), 3) if vals else None}
+            row = grid_point(s, d, 0.0)
             grid_rows.append(row)
             say(f"  {s:>6.2f} {d:>6.2f} {row['containment_pct']:>11.2f}% "
-                f"{nme_stats(vals):>40}")
+                f"{nme_stats(row['_vals']):>40}")
+
+    # horizontal offset, swept at the best (scale, shift_y) above. Separable
+    # to keep this a 1D pass rather than a third grid dimension: the axes act
+    # on different components of the centre error and section 5b reports both
+    # biases independently.
+    best_sy = min(grid_rows, key=lambda r: r["nme_pct_mean"])
+    say(f"\n  horizontal offset at the best (scale {best_sy['box_scale']:.2f}, "
+        f"shift_y {best_sy['box_shift_y']:.2f}); box_shift_x has existed in "
+        "the calibration report since milestone 3 and never in the transform:")
+    say(f"  {'shift_x':>8} {'NME':>26}")
+    for dx in GRID_SHIFTS_X:
+        row = grid_point(best_sy["box_scale"], best_sy["box_shift_y"], dx)
+        grid_rows.append(row)
+        say(f"  {dx:>8.2f} {nme_stats(row['_vals']):>40}")
+    for r in grid_rows:
+        r.pop("_vals", None)
 
     # ---- 4. refinement, crossed with the stage-1 calibration ---------------
     say("\n=== 4. Two-stage refinement crossed with the stage-1 calibration ===")
@@ -269,7 +316,8 @@ def main() -> int:
         for sh in GRID_SHIFTS:
             s1, s2 = [], []
             for rel in right_face:
-                box1 = haar_to_crop_box(haar_boxes[rel][0], sc, sh)
+                box1 = haar_to_crop_box(haar_boxes[rel][0], sc, sh,
+                                        det.haar.box_shift_x)
                 pred1 = run_model(grays[rel], box1)
                 s1.append(nme(pred1, gt24[rel]))
                 box2 = square_box_around(pred1, det.refine_expand)
@@ -292,7 +340,8 @@ def main() -> int:
     for re_exp in REFINE_EXPANDS:
         vals = []
         for rel in right_face:
-            box1 = haar_to_crop_box(haar_boxes[rel][0], best[1], best[2])
+            box1 = haar_to_crop_box(haar_boxes[rel][0], best[1], best[2],
+                                    det.haar.box_shift_x)
             pred1 = run_model(grays[rel], box1)
             vals.append(nme(run_model(grays[rel], square_box_around(pred1, re_exp)),
                             gt24[rel]))
@@ -307,7 +356,8 @@ def main() -> int:
     s3 = []
     for rel in right_face:
         pred = run_model(grays[rel], haar_to_crop_box(haar_boxes[rel][0],
-                                                      best[1], best[2]))
+                                                      best[1], best[2],
+                                                      det.haar.box_shift_x))
         for _ in range(2):
             pred = run_model(grays[rel], square_box_around(pred, best_exp))
         s3.append(nme(pred, gt24[rel]))
@@ -320,12 +370,13 @@ def main() -> int:
         "both the wrong size and the wrong centre. These four variants "
         "separate the two.")
     cal_sc, cal_sh = det.haar.box_scale, det.haar.box_shift_y
+    cal_sx = det.haar.box_shift_x
     variants = {"A gt box (ceiling)": [], "B gt centre, deploy size": [],
                 "C deploy centre, gt size": [], "D deploy box (both)": []}
     realized_k, offsets = [], []
     for rel in right_face:
         g = gt_box[rel]
-        d_box = haar_to_crop_box(haar_boxes[rel][0], cal_sc, cal_sh)
+        d_box = haar_to_crop_box(haar_boxes[rel][0], cal_sc, cal_sh, cal_sx)
         gcx, gcy = g.x0 + g.side / 2, g.y0 + g.side / 2
         dcx, dcy = d_box.x0 + d_box.side / 2, d_box.y0 + d_box.side / 2
         realized_k.append(d_box.side / g.side)
@@ -359,6 +410,68 @@ def main() -> int:
             m = (arr >= lo) & (arr < hi)
             if m.sum():
                 say(f"    {lo:.2f} to {hi:.2f}: {100 * dv[m].mean():6.3f}%  (n={m.sum()})")
+
+    # ---- 5b. centre error: detector scatter vs calibration bias ------------
+    say("\n=== 5b. Whose centre error is it? ===")
+    say("  Section 5 says the residual is centre, not size. This splits the "
+        "centre error into the part a constant transform can remove (a BIAS: "
+        "our calibration puts the box in the wrong place on every face the "
+        "same way) and the part it cannot (SCATTER: the Haar box lands "
+        "differently face to face). Offsets are in units of the DEPLOY box "
+        "side, which is what box_shift_x and box_shift_y are multiplied by.")
+    dxs, dys = [], []
+    for rel in right_face:
+        g = gt_box[rel]
+        d_box = haar_to_crop_box(haar_boxes[rel][0], cal_sc, cal_sh, cal_sx)
+        gcx, gcy = g.x0 + g.side / 2, g.y0 + g.side / 2
+        dcx, dcy = d_box.x0 + d_box.side / 2, d_box.y0 + d_box.side / 2
+        dxs.append((dcx - gcx) / d_box.side)
+        dys.append((dcy - gcy) / d_box.side)
+    dxs, dys = np.array(dxs), np.array(dys)
+    say(f"  horizontal: bias {dxs.mean():+.4f}  scatter (sd) {dxs.std():.4f}  "
+        f"p10 {np.percentile(dxs, 10):+.4f}  p90 {np.percentile(dxs, 90):+.4f}")
+    say(f"  vertical:   bias {dys.mean():+.4f}  scatter (sd) {dys.std():.4f}  "
+        f"p10 {np.percentile(dys, 10):+.4f}  p90 {np.percentile(dys, 90):+.4f}")
+    say(f"  bias / scatter ratio: horizontal {abs(dxs.mean()) / max(dxs.std(), 1e-9):.2f}, "
+        f"vertical {abs(dys.mean()) / max(dys.std(), 1e-9):.2f}. Above 1 means "
+        "the systematic part dominates and calibration is worth more than a "
+        "better detector; below 1 means the reverse.")
+    say(f"  the bias-cancelling config values would be "
+        f"box_shift_x {cal_sx - dxs.mean():+.4f}, "
+        f"box_shift_y {cal_sh - dys.mean():+.4f}")
+
+    # A horizontal bias that only appears on turned heads is not a constant:
+    # a frontal cascade boxes the visible part of a yawed face, so the offset
+    # follows the pose. Split it, because a constant shift_x can only fix the
+    # part that is there on frontal faces too.
+    posed = np.array([bool(targets[rel].attributes.get("pose", 0))
+                      for rel in right_face])
+    if posed.any() and (~posed).any():
+        say(f"  horizontal bias on frontal faces {dxs[~posed].mean():+.4f} "
+            f"(n={int((~posed).sum())}) against {dxs[posed].mean():+.4f} on "
+            f"pose-flagged faces (n={int(posed.sum())}). A bias that only "
+            "appears with pose is not a constant and a single shift_x cannot "
+            "remove it.")
+
+    corrected = [nme(run_model(grays[rel],
+                               haar_to_crop_box(haar_boxes[rel][0], cal_sc,
+                                                cal_sh - float(dys.mean()),
+                                                cal_sx - float(dxs.mean()))),
+                     gt24[rel]) for rel in right_face]
+    say("\n  end NME on the same faces:")
+    say(f"    as configured                {nme_stats(variants['D deploy box (both)'])}")
+    say(f"    bias removed (best constant) {nme_stats(corrected)}")
+    say(f"    ground-truth centre (oracle) {nme_stats(variants['B gt centre, deploy size'])}")
+    dd = float(np.mean(variants["D deploy box (both)"]))
+    cc = float(np.mean(corrected))
+    bb = float(np.mean(variants["B gt centre, deploy size"]))
+    say(f"    removable by calibration: {100 * (dd - cc):+.3f} NME points")
+    say(f"    left as detector scatter: {100 * (cc - bb):+.3f} NME points")
+    say("  The first number is ours to fix in the config. The second is the "
+        "Haar box landing in a different place on each face, and no constant "
+        "transform reaches it: it needs a better front end, or a second stage "
+        "that rebuilds the box from predicted points, which is what "
+        "refinement does.")
 
     # ---- 6. boxing from 24 landmarks, which is what a landmark front end
     # ---- hands the model ---------------------------------------------------
@@ -407,6 +520,16 @@ def main() -> int:
                             "nme_pct": round(100 * best[0], 3)},
         "residual_decomposition": {k: round(100 * float(np.mean(v)), 3)
                                    for k, v in variants.items()},
+        "centre_error": {
+            "shift_x_bias": round(float(dxs.mean()), 4),
+            "shift_x_scatter": round(float(dxs.std()), 4),
+            "shift_y_bias": round(float(dys.mean()), 4),
+            "shift_y_scatter": round(float(dys.std()), 4),
+            "suggested_box_shift_x": round(cal_sx - float(dxs.mean()), 4),
+            "suggested_box_shift_y": round(cal_sh - float(dys.mean()), 4),
+            "nme_as_configured_pct": round(100 * dd, 3),
+            "nme_bias_removed_pct": round(100 * cc, 3),
+            "nme_oracle_centre_pct": round(100 * bb, 3)},
     }
     with open(out_dir / "m6_diagnosis.yaml", "w") as f:
         yaml.safe_dump(results, f, sort_keys=False)

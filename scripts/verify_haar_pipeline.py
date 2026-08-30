@@ -104,7 +104,8 @@ def best_containment_calibration(side, cx, cy, lm) -> tuple[float, float, float]
 
 def render_matched(image, rec, hb, det, schema, input_size, expand) -> np.ndarray:
     gt = gt_crop_box(rec.landmarks98, expand)
-    crop_box = haar_to_crop_box(hb, det.box_scale, det.box_shift_y)
+    crop_box = haar_to_crop_box(hb, det.box_scale, det.box_shift_y,
+                                det.box_shift_x)
     view = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     for b, color in ((gt, (80, 220, 80)), (hb, (60, 60, 255)), (crop_box, (255, 220, 60))):
         x0, y0, x1, y1 = (int(round(v)) for v in rect(b))
@@ -306,12 +307,15 @@ def main() -> int:
     if matched:
         errs = []
         for rec, hb in matched[:500]:
-            crop = haar_to_crop_box(hb, det.box_scale, det.box_shift_y)
+            crop = haar_to_crop_box(hb, det.box_scale, det.box_shift_y,
+                                    det.box_shift_x)
             pts = rec.landmarks98[schema.wflw_indices]
             back = to_frame_space(to_crop_space(pts, crop), crop)
             errs.append(np.abs(back - pts).max())
         say(f"  frame -> crop space -> frame, max error: {max(errs):.9f} px (exact)")
-        med_side = int(np.median([haar_to_crop_box(hb, det.box_scale, det.box_shift_y).side
+        med_side = int(np.median([haar_to_crop_box(hb, det.box_scale,
+                                                  det.box_shift_y,
+                                                  det.box_shift_x).side
                                   for _, hb in matched]))
         say(f"  quantisation bound at model input {input_size}px: half a crop pixel "
             f"= {0.5 * med_side / input_size:.2f} frame px at the median crop side "

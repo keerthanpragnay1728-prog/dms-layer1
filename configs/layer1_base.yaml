@@ -97,6 +97,12 @@ face_detector:
   # moves along the flat part instead of off a cliff.
   box_scale: 1.30
   box_shift_y: 0.13
+  # Horizontal offset, same units. Zero until milestone 6 section 5b measures
+  # it: the residual decomposition showed centre error costs about 3.9 NME
+  # points against 0.3 for size, and a Haar box is not necessarily centred on
+  # the face horizontally either. calibrate_haar_to_crop has reported this
+  # number since milestone 3; the transform could not apply it until now.
+  box_shift_x: 0.00
   match_iou: 0.30      # Haar box <-> annotated face matching threshold
   # Which detection to track when the cascade returns several. Milestone 6
   # found 'largest' picks the subject on only 27.67% of single-face WFLW
@@ -167,15 +173,26 @@ detector:
   # tolerates the framing (16.3 -> 12.6). Which stage-1 calibration pairs
   # best with it is measured by diagnose_deploy_gap.py section 4.
   refine_stages: 2
-  refine_expand: 1.30  # framing of the rebuilt box, in the same units as
-                       # preprocess.reference_expand
+  # Framing of the rebuilt box, in the same units as
+  # preprocess.reference_expand. 1.60 from two independent measurements on the
+  # framing-aware model: the section-4 refine sweep wants 1.45 to 1.60, and
+  # section 6 (boxing ground-truth 24 points, detector error removed) puts the
+  # best 24-point expand at 1.60, k = 1.131. The old 1.30 implied k = 0.921,
+  # below the trained envelope: a box around 24 points is tighter than the
+  # box around 98 the cache was built from, so the nominal number was never
+  # the canonical framing.
+  refine_expand: 1.60
   # Framing for the component-swap row (MediaPipe's face, our model). A box
   # around 24 points is not the box around 98 points the cache was built
   # with, so the nominal value is not a calibration: 'auto' uses
   # reference_expand and prints that it is uncalibrated. Set a number from
   # scripts/diagnose_deploy_gap.py section 6, chosen on end NME, exactly as
   # box_scale was chosen in section 3.
-  cross_expand: auto
+  # 1.60 from section 6, the same 24-point box construction as refine_expand
+  # above. At the nominal 1.30 this path ran at k = 0.921 and scored 10.584%
+  # against 8.949% here, so the 13.776% ablation row was measuring a missing
+  # calibration rather than the front end it is meant to isolate.
+  cross_expand: 1.60
   # Weights for OUR detector: an exported landmarks24*.pt (preferred) or a
   # training checkpoint. 'auto' searches /kaggle/input and uses a single
   # unambiguous hit; several hits raise with the list, never a silent pick.

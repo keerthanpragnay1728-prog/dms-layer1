@@ -692,3 +692,109 @@ The honest summary for the report:
 Leading with the aggregate would state a lead that reverses in deployment,
 which is the worst kind of claim to have to defend. The size table goes in the
 report next to the sentence.
+
+## Section 5 moved the target: the residual is centre, not size
+
+The residual decomposition on right-face images, so face selection is
+excluded by construction:
+
+| variant | NME | cost against the ceiling |
+|---------|-----|--------------------------|
+| A ground-truth box (ceiling) | 7.187% | |
+| B ground-truth centre, deploy size | 7.532% | size alone, +0.346 |
+| C deploy centre, ground-truth size | 11.106% | centre alone, +3.920 |
+| D deploy box, both | 11.209% | both, +4.022 |
+
+Binned, the same thing twice: 6.060% under 0.05 of a face side of centre
+error against 47.759% past 0.20, and 8.177% at realized k between 1.10 and
+1.30 against 44.083% past 1.50.
+
+Size is almost free and centre carries the residual, which is awkward,
+because every calibration decision since milestone 3 has been about scale.
+box_scale was swept in milestone 3, re-chosen on end NME in milestone 6, and
+swept again against refinement. box_shift_y has only ever been tried at two
+values, 0.08 and 0.13, and there has never been a horizontal parameter at
+all, even though `calibrate_haar_to_crop` has reported a `box_shift_x`
+alongside the others since milestone 3 and nothing could apply it.
+
+Three changes follow.
+
+`haar_to_crop_box` takes a third parameter. `face_detector.box_shift_x` is a
+config value, zero until measured, threaded through the detector, the
+verification script and the diagnostic so every path uses one transform.
+
+The calibration grid searches the centre properly: seven values of
+box_shift_y from 0.00 to 0.20 crossed with the scales, then box_shift_x swept
+at the best of those. The axes are searched separably rather than as a third
+grid dimension, because section 5b reports the two biases independently and
+they act on different components of the same error.
+
+### 5b: whose centre error is it
+
+The question section 5 cannot answer is whether the centre error is the Haar
+box landing in the wrong place or our transform putting it there. Section 5b
+splits it into the part a constant transform can remove and the part it
+cannot:
+
+* **Bias**, the mean signed offset in units of the deploy box side, which is
+  exactly what `box_shift_x` and `box_shift_y` multiply. Our calibration
+  putting the box in the same wrong place on every face. Removable.
+* **Scatter**, the standard deviation of the same offsets. The detector
+  landing differently face to face. No constant transform reaches it.
+
+The section reports both, their ratio, the bias-cancelling config values, and
+end NME under three conditions on the same faces: as configured, with the
+bias removed, and with the ground-truth centre. The first gap is what
+calibration is worth. The second is what is left for a better front end or
+for refinement, which rebuilds the box from predicted points and is the only
+mechanism in the pipeline that can respond per face.
+
+It also splits the horizontal bias by the pose attribute. A frontal cascade
+boxes the visible part of a turned head, so a horizontal offset that appears
+only on pose-flagged faces is not a constant and a single `box_shift_x`
+cannot remove it. That distinction decides whether the parameter is worth
+having.
+
+## The component-swap row was measuring a missing calibration
+
+Section 6 settled the question left open above. The cross path's nominal 1.30
+expand implied k = 0.921, below the trained envelope; the best 24-point expand
+is 1.60 at k = 1.131, worth 8.949% against 10.584% at nominal. The 13.776%
+ablation row was measuring the missing calibration, not the front end it was
+meant to isolate.
+
+So the stronger reading, that the model cannot be treated as independent of
+the detector feeding it, is not supported. The claim that survives is the
+weaker one: a crop-based regressor has a preferred crop geometry, and every
+front end that feeds it needs calibrating to that geometry. Swapping the
+detector costs a calibration step. `detector.cross_expand` is 1.60 and the
+ablation re-runs with the cross row as a like-for-like swap.
+
+`detector.refine_expand` moves to 1.60 on the same evidence: the section-4
+sweep wants 1.45 to 1.60 and section 6 puts the best 24-point box at 1.60.
+Both are the same construction, a box around 24 points, and 1.30 was never
+the canonical framing for it.
+
+Refinement itself is now characterised rather than assumed: the gain is
+negative from tight stage-1 boxes and +2.434 from a loose 1.75 one, so it
+rescues bad boxes rather than improving good ones, and a third stage is flat,
+so it converges at two.
+
+`face_detector.box_scale` and `box_shift_y` stay where they are until the
+centre search runs. Adopting the (1.45, 0.08) winner of a scale-centric grid
+would be settling the axis that carries 0.3 points and leaving the one that
+carries 3.9.
+
+## A gate that failed for the wrong reason
+
+The diagnostic's any-box gate said "should reproduce 72.08%" and came back at
+68.62% on unchanged settings, which reads as a regression. It is not one. The
+72.08% was measured at min_neighbors 2, and min_neighbors was raised to 5 by
+the selection diagnostic in c7ad69a: a deliberate trade of any-box recall for
+fewer spurious boxes, since any-box recall falls when there are fewer boxes
+to hit with. The gate compared a number against a baseline from different
+settings.
+
+The baseline is now stored with the settings that produced it, and the gate
+prints the current settings, says whether they match, and explains what to
+compare against when they do not. A bare number is not a gate.

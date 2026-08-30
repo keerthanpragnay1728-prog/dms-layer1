@@ -135,3 +135,21 @@ def test_detector_scores_are_populated():
     boxes = det.detect(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
     assert boxes, "cascade found nothing on a schematic face"
     assert any(b.score != 0.0 for b in boxes)
+
+
+def test_box_shift_x_moves_the_centre_and_nothing_else():
+    """Centre error, not size, carries the deploy residual (milestone 6
+    section 5), so the transform has a horizontal offset as well. It must move
+    the box and leave the size alone, and default to the old two-parameter
+    behaviour."""
+    hb = FaceBox(x=100, y=140, w=200, h=180)
+    base = haar_to_crop_box(hb, box_scale=1.30, box_shift_y=0.13)
+    same = haar_to_crop_box(hb, box_scale=1.30, box_shift_y=0.13, box_shift_x=0.0)
+    assert (same.x0, same.y0, same.side) == (base.x0, base.y0, base.side)
+
+    side_f = max(hb.w, hb.h) * 1.30
+    for dx in (-0.05, 0.05):
+        moved = haar_to_crop_box(hb, 1.30, 0.13, dx)
+        assert moved.side == base.side, "shift_x changed the box size"
+        assert moved.y0 == base.y0, "shift_x moved the box vertically"
+        assert abs((moved.x0 - base.x0) - dx * side_f) <= 1.0

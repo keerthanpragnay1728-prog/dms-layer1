@@ -9,7 +9,7 @@ so the transform has two parameters, measured against ground truth by
 scripts/verify_haar_pipeline.py and stored in the config:
 
     side   = max(w, h) * box_scale
-    centre = haar box centre, shifted down by box_shift_y * side
+    centre = haar box centre, shifted by (box_shift_x, box_shift_y) * side
 
 Crop extraction and coordinate mapping reuse dms_layer1/data/crops.py, so
 the detector and the training cache can never disagree on the transform.
@@ -102,10 +102,19 @@ def box_iou(a: tuple[float, float, float, float],
     return inter / (area_a + area_b - inter)
 
 
-def haar_to_crop_box(box: FaceBox, box_scale: float, box_shift_y: float) -> CropBox:
-    """Calibrated Haar box -> integer square model crop box."""
+def haar_to_crop_box(box: FaceBox, box_scale: float, box_shift_y: float,
+                     box_shift_x: float = 0.0) -> CropBox:
+    """Calibrated Haar box -> integer square model crop box.
+
+    Three parameters, not two. Milestone 6 section 5 decomposed the deploy
+    residual and found centre error costs about 3.9 NME points against 0.3
+    for size, so where the box sits matters more than how big it is.
+    calibrate_haar_to_crop has been measuring a horizontal offset since
+    milestone 3; until now the transform had no way to apply it.
+    """
     side_f = max(box.w, box.h) * box_scale
     cx, cy = box.center
+    cx += box_shift_x * side_f
     cy += box_shift_y * side_f
     x0_f, y0_f = cx - side_f / 2, cy - side_f / 2
     x0, y0 = int(np.floor(x0_f)), int(np.floor(y0_f))
@@ -182,6 +191,7 @@ class HaarFaceDetector:
         self.equalize_hist = bool(require(cfg, "face_detector.equalize_hist"))
         self.box_scale = float(require(cfg, "face_detector.box_scale"))
         self.box_shift_y = float(require(cfg, "face_detector.box_shift_y"))
+        self.box_shift_x = float(require(cfg, "face_detector.box_shift_x"))
         # Optional profile-face fallback for turned heads: runs only when the
         # frontal cascade finds nothing. The stock profile cascade detects
         # LEFT-facing profiles, so a mirrored second pass covers right-facing.
@@ -240,7 +250,8 @@ class HaarFaceDetector:
         box = self.select(gray)
         if box is None:
             return None
-        return haar_to_crop_box(box, self.box_scale, self.box_shift_y)
+        return haar_to_crop_box(box, self.box_scale, self.box_shift_y,
+                                self.box_shift_x)
 
     def select(self, gray: np.ndarray) -> FaceBox | None:
         """The single face this frame is about, per face_detector.selection."""
