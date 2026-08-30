@@ -53,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dms_layer1.config import load_config, require, resolve_path, save_config_snapshot
 from dms_layer1.data import wflw
 from dms_layer1.data.crops import square_box_around
+from dms_layer1.evaluation import signals
 from dms_layer1.evaluation.matching import match_target
 from dms_layer1.landmarks.schema import load_schema
 
@@ -152,14 +153,6 @@ def describe_alternative(cfg_idx: int, alt_idx: int,
     return f"same {fa}"
 
 
-def eye_ear(p6: np.ndarray) -> float:
-    """EAR on one eye, from the six points in the schema's per-eye order
-    [corner, upper, upper, corner, lower, lower]. This is the quantity Layer 2
-    consumes, so it is the mapping's real acceptance test."""
-    return float((np.linalg.norm(p6[1] - p6[5]) + np.linalg.norm(p6[2] - p6[4]))
-                 / (2 * max(np.linalg.norm(p6[0] - p6[3]), 1e-9)))
-
-
 def chord_skew(p6: np.ndarray) -> float:
     """How far the two EAR chords are from perpendicular to the corner axis,
     as a fraction of eye width. EAR assumes vertical chords: the numerator is
@@ -183,9 +176,11 @@ def chord_skew_one(p6: np.ndarray, which: int) -> float:
 
 
 def eye_stats(pts24: np.ndarray) -> tuple[float, float]:
-    """Mean EAR and mean chord skew over the two eyes of one face."""
+    """Mean EAR and mean chord skew over the two eyes of one face. EAR comes
+    from dms_layer1.evaluation.signals so this script and the stability
+    harness cannot disagree about what Layer 2 consumes."""
     eyes = [pts24[0:6], pts24[6:12]]
-    return (float(np.mean([eye_ear(e) for e in eyes])),
+    return (float(np.mean(signals.ear(pts24))),
             float(np.mean([chord_skew(e) for e in eyes])))
 
 

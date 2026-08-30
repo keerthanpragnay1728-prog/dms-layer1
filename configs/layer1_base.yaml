@@ -220,6 +220,28 @@ detector:
     allow_download: true   # Kaggle notebooks have internet on; set false and
                            # point model_path at an uploaded dataset if not
 
+# ----- milestone 7: frame-to-frame stability ---------------------------------
+# Sequences are synthesised from stills: a smooth random walk plus sensor
+# noise, with the annotation warped alongside so ground truth is known per
+# frame and jitter can be measured on the residual rather than on the raw
+# trajectory. The amplitudes below are per-frame steps, scaled by the face,
+# and they are deliberately small: this is a camera holding a driver in
+# frame, not a face moving across a room.
+stability:
+  sequences: 30          # stills turned into sequences
+  frames: 60             # frames each; 60 is two seconds at 30 fps
+  translate_frac: 0.010  # per-frame step, as a fraction of the face side
+  rotate_deg: 0.40
+  scale_frac: 0.004
+  smoothness: 0.85       # AR(1) coefficient; real head motion is correlated
+  noise_sigma: 2.0       # gray levels, iid per pixel per frame
+  brightness_amp: 3.0    # gray levels, smooth drift
+  # A blink threshold as a fraction of the sequence's own mean EAR, which is
+  # the per-driver calibration Layer 2 performs. Crossings on a sequence
+  # where the eyes never close are false blinks.
+  blink_threshold_frac: 0.80
+  out_dir: /kaggle/working/m7_stability
+
 # ----- milestone 5: test-set evaluation --------------------------------------
 eval:
   # Same-session default; for a separate eval session attach the training
