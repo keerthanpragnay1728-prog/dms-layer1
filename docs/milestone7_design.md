@@ -88,3 +88,45 @@ lighting changes only as a global brightness drift. Every jitter number from
 them is a lower bound. The `--video` path exists so the harness can be run on
 a real clip, where the numbers are realistic and the estimator is weaker, and
 the two are reported apart.
+
+## Corrections and additions after the first run
+
+**A reference number was fabricated.** The harness printed box jitter next to
+"the 0.0338 per-face scatter from milestone 6 section 5b". That figure appears
+in no measurement. It was written into the script text from memory and it was
+wrong, which made the first run's headline comparison, six times larger in
+time than across faces, wrong along with it. The harness now reads the real
+value from the milestone 6 YAML when given `--m6-yaml`, and says the number is
+unavailable rather than quoting one when it is not.
+
+This is the third time in the project that a hardcoded reference asserted
+something the code could not check, after the framing envelope message and the
+any-box gate, and the lesson is the same each time: a number written in prose
+beside a measurement is not a measurement, and it will eventually be read as
+one.
+
+**Box jitter is split into discrete and continuous parts.** A cascade searches
+a scale pyramid on a grid and merges neighbours, so a small image change can
+flip which candidate wins or at which level, and the box steps rather than
+slides. One standard deviation cannot distinguish a few large steps from
+constant small wobble, and the two call for different responses: temporal
+smoothing fixes wobble and does nothing for steps.
+
+**The perturbation model is ablatable.** `--ablate-perturbation` repeats
+section 1 with motion only and with sensor noise only. If the noise-only case
+reproduces most of the jitter, the section is measuring
+`stability.noise_sigma` rather than the detector, and only a real recording
+can set that parameter honestly.
+
+**Availability is a reported metric, not a footnote.** A dropped frame is a
+frame with no drowsiness estimate. Dropout rate, gap count and the longest gap
+in seconds are reported per row, because Layer 2 aggregates over a window and
+the same 3% lost singly or lost in one blackout are different failures.
+
+**A null result is reported as a bound.** Zero false crossings in n frame
+pairs bounds the rate at 3/n by the rule of three, not at zero. The harness
+prints that bound in seconds at 30 fps, alongside the margin between the EAR
+and its threshold in units of the EAR's own jitter, which is the quantity that
+generalises beyond the sequences tested. Crossings are also counted in the
+sustained form a blink detector would act on, since a single-frame dip is not
+a blink.
