@@ -127,6 +127,13 @@ nme_normalisation: {left: left_eye_outer, right: right_eye_outer}
 #     left/right asymmetry) and the cross-detector offset table in
 #     scripts/compare_detectors.py measures how close they sit.
 # Entry i of `indices` feeds our output point i.
+# Optional: further mappings scored alongside the one above, purely to show
+# whether the index choice could decide the ablation. One list, or several
+# named lists. Derive them on the TRAIN split (scripts/verify_mediapipe_mapping.py
+# writes proximity_optimal_indices) and never adopt one from a test-split run.
+#   indices_alt:
+#     proximity: [...]
+#     mixed:     [...]
 mediapipe:
   refine_landmarks: true
   indices: [33, 160, 158, 133, 153, 144,

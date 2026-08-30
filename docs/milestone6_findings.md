@@ -336,7 +336,7 @@ the comparison runs against whatever MediaPipe ships today, and what it
 ships changed under the project. The report should name the exact version
 and bundle used, which the comparison script now prints and records.
 
-## The mapping question: nine flagged indices, and why the four eyelid ones stay
+## The mapping question: nine flagged indices, one falsified argument
 
 The mapping verification on the test split (n = 80 usable faces of 300) put
 every point inside tolerance and the pupils at 1.79% of IOD, but its control
@@ -373,65 +373,193 @@ slightly different point along the lid, not different features. WFLW's six
 eye points sit slightly wider along the lid than MediaPipe's, and that
 difference is what the control is measuring.
 
-### Why moving to them would cost more than it gains
+### The chord-alignment argument, made and then falsified
 
-EAR is defined on chords: `(|p1 - p5| + |p2 - p4|) / (2 |p0 - p3|)`. It reads
-the numerator as lid separation, which is only true when each chord is
-perpendicular to the corner-to-corner axis. In ring positions, the configured
-sextet is exactly symmetric about that axis:
+This section originally argued that the configured sextet keeps both EAR
+chords perpendicular to the corner axis and that every proposed swap tilts
+one of them. The full-split run measured that claim and it is half wrong.
+The wrong half is recorded here rather than deleted, because the corrected
+justification only makes sense against it.
 
-| chord | configured | positions | alternative | positions |
-|-------|-----------|-----------|-------------|-----------|
-| p1 to p5 | 160, 144 | 3 and 13, mirrored about 8 | 160, 163 | 3 and 14, off by one |
-| p2 to p4 | 158, 153 | 5 and 11, mirrored about 8 | 157, 153 | 6 and 11, off by one |
+The argument was: EAR is `(|p1 - p5| + |p2 - p4|) / (2 |p0 - p3|)`, which
+reads its numerator as lid separation only when each chord is perpendicular
+to the corner-to-corner axis; in ring positions the configured sextet is
+symmetric about that axis (chords at 3-13 and 5-11, both mirrored about the
+inner corner at 8) while each swap moves one endpoint by a vertex; therefore
+every swap tilts a chord.
 
-Both configured chords are vertical by construction. Each proposed swap tilts
-one of them, so the numerator starts picking up eye width along with eye
-opening. The configured set is the canonical six-point EAR selection for this
-mesh for exactly that reason.
+Measured on 624 faces, one swap at a time:
 
-So the two candidate mappings optimise different things. The proximity
-mapping minimises distance to WFLW's annotation convention; the configured
-mapping preserves the geometry the aspect ratio is defined on. Fitting the
-first on the evaluation split would also be fitting the mapping to the test
-set.
+| swap | lid | chord skew before | after | |
+|------|-----|------------------|-------|--|
+| 158 to 157 | upper | 0.0901 | 0.1057 | worse, as the argument predicted |
+| 144 to 163 | lower | 0.0901 | 0.0713 | BETTER, contradicting it |
+| 385 to 384 | upper | 0.0904 | 0.1017 | worse, as predicted |
+| 373 to 390 | lower | 0.0904 | 0.0707 | BETTER, contradicting it |
+
+The split is clean: upper-lid swaps tilt the chord, lower-lid swaps
+straighten it. So the configured sextet is not the minimum-skew choice, and
+the prediction that any swap must tilt a chord is false.
+
+The mistake was treating a ring index as a geometric coordinate. It is a
+topological one. Both lids carry seven vertices between the corners, but they
+are distributed along arcs of different length, so mirrored ring positions do
+not land at the same place along the eye axis. Measured directly on a fitted
+mesh, the supposedly mirrored pair 160 and 144 sits at 0.214 and 0.249 of eye
+width from the outer corner: the configured chord already leans by about
+0.035 eye widths before anything is swapped. Nothing about verticality
+follows from the index, in either direction.
+
+What survives is the part that came from topology alone, which the
+measurement does not touch: the four alternatives are neighbouring vertices
+on the same 16-point eye ring, so they are the same anatomy sampled at a
+different point along the lid, and the contour alternatives are interior mesh
+vertices on no named feature. Both were checked against MediaPipe's published
+connection sets and are confirmed by the full-split run.
+
+### The corrected justification: correlation, not geometry
+
+Section 4 on the full split:
+
+| mapping | mean absolute EAR error vs gt | correlation with gt | chord skew |
+|---------|------------------------------|--------------------|------------|
+| ground truth | 0.0000 | 1.000 | 0.0325 |
+| configured | 0.0563 | 0.760 | 0.0902 |
+| proximity-optimal | 0.0442 | 0.723 | 0.0809 |
+
+The proximity mapping is closer in absolute EAR and less skewed, and
+correlates worse. Layer 2 calibrates per driver, so a constant offset is
+absorbed and the relationship with the truth is not. Correlation is therefore
+the criterion, and the configured mapping is kept on it.
+
+That makes chord skew a diagnostic rather than a decision rule. It has now
+failed twice as a predictor of the thing that matters: it mispredicted the
+direction of two of the four swaps, and the mapping with the lower skew is
+the one that correlates worse. It stays in the output because it explains
+what an index change does to the geometry; it does not decide anything.
+
+One caution attached to the number above. A gap of 0.760 against 0.723 is two
+point estimates, and treating a point estimate as a fact is the same error
+that produced the falsified argument. The script now reports the correlation
+difference against the configured mapping as a paired bootstrap over faces
+with a 95% interval. If that interval excludes zero, the justification is
+"configured correlates better"; if it includes zero, the justification is
+"the two are indistinguishable on the criterion that matters, so the mapping
+chosen on semantics and documented in the schema stands". Either way the
+mapping does not change, but the sentence in the report differs and only the
+interval says which one is true.
 
 ### The decision rule adopted
 
-1. The schema mapping stays chosen on semantics and stays fixed. Its offset
-   from WFLW's convention is reported, not minimised.
-2. The alternative is measured rather than argued about.
-   `scripts/verify_mediapipe_mapping.py` now reports, for every flagged
-   index, whether the closer vertex is on the same feature ring and how many
+1. The schema mapping stays chosen on semantics and stays fixed, and is kept
+   on EAR correlation with ground truth rather than on proximity to WFLW's
+   annotation convention. Its offset from that convention is reported, not
+   minimised.
+2. Candidates are measured rather than argued about.
+   `scripts/verify_mediapipe_mapping.py` reports, for every flagged index,
+   whether the closer vertex is on the same feature ring and how many
    vertices away, a paired per-face gain with its standard error, and what
-   the swap does to that eye's EAR chord geometry. Section 4 reports both
-   mappings side by side on the two things they are used for: NME over all
-   24 points, and EAR agreement with ground truth (mean absolute difference,
-   correlation, chord skew).
+   the swap does to that eye's chord geometry. Section 4 scores every
+   candidate mapping (the schema's, any declared alternatives, and the
+   proximity-optimal one) on NME over 24 points, on eyelid NME, and on EAR
+   against ground truth: mean absolute error, correlation with a bootstrap
+   interval on the difference, and each chord's skew separately, since the
+   outer and inner chords do not respond alike to an index change and
+   averaging them concealed exactly that.
 3. Any index change must be derived on the TRAIN split. The script says so
    when it is run on test.
-4. The ablation itself carries the sensitivity check. Setting
-   `mediapipe.indices_alt` in the schema adds a `mediapipe_alt_map` row to
-   `scripts/compare_detectors.py`, scored off the same mesh, and the paired
-   section prints our margin under both mappings. If the sign and the
-   conclusion hold under both, the index choice is not what decided the
-   comparison, and the report can say so with a number.
+4. The ablation itself carries the sensitivity check. `mediapipe.indices_alt`
+   in the schema takes one index list or several named ones, and each adds a
+   `mediapipe_map_<name>` row to `scripts/compare_detectors.py`, scored off
+   the same mesh. The paired section prints our margin under every mapping.
+   If the sign and the conclusion hold across all of them, the index choice
+   is not what decided the comparison, and the report can say so with a
+   number.
+5. The bound is reported whatever is chosen. On the full test split,
+   switching every index to the proximity-optimal one moves MediaPipe's NME
+   by 1.952 +- 0.041 points. That is the most the mapping choice can flatter
+   or hurt either detector, and it belongs in the report next to the
+   comparison itself.
 
-### Sample size, and what the 80 usable faces are
+### The mixed mapping, and how it would have to be decided
 
-Of 300 test images, MediaPipe found no face in 178 and a different face in
-42. That is a property of the Tasks bundle's short-range face detector rather
-than a bug: it is built for faces that fill a reasonable part of the frame,
-and WFLW is web photography full of small faces in group shots. The
-verification script now prints the median target-face size for found versus
-missed faces so the population the medians describe is visible.
+The measurement suggests a third candidate: configured on the upper lid,
+swapped on the lower, which is where the skew actually improves.
 
-Two consequences. For the mapping question, the pairing is per face and the
-differences are systematic, so the standard error is small even at n = 80;
-the script prints it rather than leaving it to be assumed. For the ablation,
-MediaPipe's detection rate on full WFLW frames is measuring a short-range
-detector against a long-range dataset, which is worth one sentence in the
-report next to the rate itself.
+    image-left   [33, 160, 158, 133, 153, 163]
+    image-right  [362, 385, 387, 263, 390, 380]
+
+There is no coherence objection to it. All six points stay on the same eye
+ring, the two corners still define the denominator, and 163 and 390 are exact
+mirrors of each other on their rings, so the two eyes stay comparable and the
+flip permutation is unaffected. "Mixing conventions" is not the problem: the
+commonly cited sextet is a community convention rather than anything
+MediaPipe defines, and any six ring vertices are as legitimate as any other
+six.
+
+The objection is procedural. The mixed set exists because per-point results
+on this data were inspected and the winners kept, which is selection on the
+evaluation set. It also inherits its motivation from skew and proximity,
+the two criteria that have now each failed to track EAR correlation. So there
+is no reason to expect it to help, and the honest prediction is that it lands
+indistinguishable from the configured mapping on correlation.
+
+If it is to be adopted, the procedure is the one already written down:
+declare it under `mediapipe.indices_alt` as a named alternative, derive the
+decision on the TRAIN split, and adopt only if the bootstrap interval on the
+correlation difference excludes zero there. Then report the test numbers
+under every mapping. If the interval includes zero, the configured mapping
+stands, and the tie goes to the documented semantic choice rather than to the
+set that was fitted.
+
+One soft argument on the same side: `[33, 160, 158, 133, 153, 144]` is the
+sextet in common use for this mesh, so a reader can check it against other
+work. A bespoke set is one more thing to defend, and it should only be
+defended if it buys something measurable.
+
+### What MediaPipe's 29% detection rate is measuring
+
+On the full test split MediaPipe found the target face in 624 of 2118 frames:
+no face at all in 1217, a different face in 277. The median target face is
+0.267 of the shorter image side where it succeeded and 0.115 where it found
+nothing, so the failures are concentrated in small faces rather than spread
+across the split.
+
+That is the bundle's face detector meeting web photography. The 3.76 MB
+`.task` file carries four models, one of which is its own face detector at
+0.23 MB, and that detector is built for faces that fill a reasonable part of
+the frame. WFLW is full of group shots and crowd scenes where the annotated
+face is a small part of a wide image.
+
+So the aggregate detection rates in the ablation are not a detector-quality
+comparison, and reporting them as one would repeat the milestone-6 mistake in
+a new place. Both front ends fail on WFLW for reasons that are about fit
+between their operating assumptions and the dataset, and the two reasons are
+different in kind:
+
+* Haar fails by firing on background structure. `diagnose_face_selection.py`
+  section 3b judged the winning box on failing frames: 46.2% are a real face
+  that is not the target, 53.8% are background, with the judge's control at
+  85.6%.
+* MediaPipe fails by not seeing small faces at all, which the size split
+  above measures directly.
+
+How this is reported:
+
+1. The aggregate rate is stated, because omitting it would be worse, but
+   never as a statement about detector quality on its own.
+2. `scripts/compare_detectors.py` now prints detection rate per target-size
+   band for every detector in the table. That turns one confounded number
+   into a curve, and it makes the cabin-relevant regime visible: a driver's
+   face fills a large part of the frame, so the top band is the one that
+   transfers and the bottom band is the one that does not.
+3. The landmark comparison stays on jointly matched faces, which is size
+   matched by construction: both detectors had to find the same face for it
+   to count. That is why the paired number is the headline and the per
+   detector rates are context.
+4. The report says plainly that a full-frame WFLW detection rate is a
+   dataset-fit measurement for both front ends, and that neither number
+   should be read as "this detector would find the driver n% of the time".
 
 ### Contour
 

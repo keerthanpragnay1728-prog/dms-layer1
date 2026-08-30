@@ -80,6 +80,7 @@ TOLERANCE_PCT_IOD = {"eyelids": 8.0, "pupils": 3.0, "mouth": 8.0,
 BETTER_INDEX_MARGIN_PCT_IOD = 1.5
 
 MIN_SAMPLE = 30      # below this the medians are not worth reading
+BOOTSTRAP_DRAWS = 2000  # paired resamples for correlation differences
 SYNTHETIC_FACES = 40  # smoke-test sample, kept above MIN_SAMPLE
 
 _lines: list[str] = []
@@ -168,6 +169,17 @@ def chord_skew(p6: np.ndarray) -> float:
     w = max(float(np.linalg.norm(axis)), 1e-9)
     u = axis / w
     return float((abs(u @ (p6[1] - p6[5])) + abs(u @ (p6[2] - p6[4]))) / (2 * w))
+
+
+def chord_skew_one(p6: np.ndarray, which: int) -> float:
+    """Skew of a single EAR chord: 0 = the outer chord p1-p5, 1 = the inner
+    chord p2-p4. Reported separately because the two chords do not respond
+    alike to an index change, which an average conceals."""
+    axis = p6[3] - p6[0]
+    w = max(float(np.linalg.norm(axis)), 1e-9)
+    u = axis / w
+    a, b = ((1, 5) if which == 0 else (2, 4))
+    return float(abs(u @ (p6[a] - p6[b])) / w)
 
 
 def eye_stats(pts24: np.ndarray) -> tuple[float, float]:
@@ -431,53 +443,94 @@ def verify(cfg: dict, schema, det, args, out_dir: Path) -> int:
                     f"configured -> {after:.4f} with the swap "
                     f"({'worse' if after > before else 'better'})")
 
-    # ---- 4: what switching would actually change --------------------------
-    say("\n=== 4. The two mappings compared on what they are used for ===")
+    # ---- 4: the candidate mappings on what they are used for --------------
+    say("\n=== 4. Candidate mappings compared on what they are used for ===")
     alt_indices = [int(b) for b in best_idx]
-    picked_alt = mesh_arr[:, alt_indices, :]
-    off_alt = (np.linalg.norm(picked_alt - gt_arr, axis=2)
-               / iod_arr[:, None]) * 100.0
-    nme_cfg, nme_alt = off.mean(axis=1), off_alt.mean(axis=1)
-    st_nme = paired(nme_cfg, nme_alt)
-    say(f"  NME over all 24 points, per face:")
-    say(f"    configured        mean {nme_cfg.mean():6.3f}%  "
-        f"median {np.median(nme_cfg):6.3f}%")
-    say(f"    proximity-optimal mean {nme_alt.mean():6.3f}%  "
-        f"median {np.median(nme_alt):6.3f}%")
-    say(f"    switching every index would move MediaPipe's NME by "
-        f"{-st_nme['mean_diff']:.3f} +- {st_nme['se']:.3f} points "
-        f"(n={st_nme['n']}). That is the largest the mapping choice can "
-        "flatter or hurt either detector.")
+    candidates = [("configured", list(indices))]
+    candidates += [(name, list(idx)) for name, idx in schema.mediapipe_alt_maps]
+    candidates.append(("proximity-optimal", alt_indices))
+
     eye_idx = schema.indices_of_group("eyelids")
-    say(f"    eyelid group only: configured {off[:, eye_idx].mean():.3f}%, "
-        f"proximity-optimal {off_alt[:, eye_idx].mean():.3f}%")
+    per_face_nme, per_face_ear = {}, {}
+    for name, idx in candidates:
+        o = (np.linalg.norm(mesh_arr[:, idx, :] - gt_arr, axis=2)
+             / iod_arr[:, None]) * 100.0
+        per_face_nme[name] = (o.mean(axis=1), o[:, eye_idx].mean())
+    st_nme = paired(per_face_nme["configured"][0],
+                    per_face_nme["proximity-optimal"][0])
+
+    say("  NME over all 24 points, per face:")
+    say(f"    {'mapping':<20} {'mean':>8} {'median':>8} {'eyelids only':>14}")
+    for name, _ in candidates:
+        v, eyelid = per_face_nme[name]
+        say(f"    {name:<20} {v.mean():7.3f}% {np.median(v):7.3f}% "
+            f"{eyelid:13.3f}%")
+    say(f"    Switching every index to the proximity-optimal one would move "
+        f"MediaPipe's NME by {-st_nme['mean_diff']:.3f} +- {st_nme['se']:.3f} "
+        f"points (n={st_nme['n']}). That is the bound on how far the mapping "
+        "choice can flatter or hurt either detector.")
 
     say("\n  EAR, which is what Layer 2 consumes and the reason the eyelid "
-        "indices are chosen at all:")
+        "indices are chosen at all. Correlation is the criterion: Layer 2 "
+        "calibrates per driver, so a constant offset is absorbed and a weaker "
+        "relationship with the truth is not. It is a PROXY, measured across "
+        "different faces because WFLW has no eye-state labels and no subject "
+        "ids; the quantity Layer 2 really needs is within-driver separation "
+        "of open from closed.")
     ear_gt = np.array([eye_stats(g)[0] for g in gt_arr])
-    ear_cfg = np.array([eye_stats(m[indices])[0] for m in mesh_arr])
-    ear_alt = np.array([eye_stats(m[alt_indices])[0] for m in mesh_arr])
-    skew_cfg = float(np.mean([eye_stats(m[indices])[1] for m in mesh_arr]))
-    skew_alt = float(np.mean([eye_stats(m[alt_indices])[1] for m in mesh_arr]))
     skew_gt = float(np.mean([eye_stats(g)[1] for g in gt_arr]))
-    def agree(e):
-        return float(np.mean(np.abs(e - ear_gt))), float(np.corrcoef(e, ear_gt)[0, 1])
-    a_cfg, r_cfg = agree(ear_cfg)
-    a_alt, r_alt = agree(ear_alt)
-    say(f"    {'mapping':<18} {'mean EAR':>9} {'|EAR - gt|':>11} "
-        f"{'corr with gt':>13} {'chord skew':>11}")
-    say(f"    {'ground truth':<18} {ear_gt.mean():9.4f} {0.0:11.4f} "
-        f"{1.0:13.3f} {skew_gt:11.4f}")
-    say(f"    {'configured':<18} {ear_cfg.mean():9.4f} {a_cfg:11.4f} "
-        f"{r_cfg:13.3f} {skew_cfg:11.4f}")
-    say(f"    {'proximity-optimal':<18} {ear_alt.mean():9.4f} {a_alt:11.4f} "
-        f"{r_alt:13.3f} {skew_alt:11.4f}")
-    say("    chord skew is how far the two EAR chords sit from perpendicular "
-        "to the corner axis, as a fraction of eye width. EAR reads its "
-        "numerator as lid separation, so a skewed chord mixes in eye width.")
-    say("    correlation is the number Layer 2 depends on: its threshold is "
-        "calibrated, so a constant EAR offset is absorbed and a weaker "
-        "relationship with the truth is not.")
+    per_face_ear["ground truth"] = ear_gt
+    rows = []
+    for name, idx in candidates:
+        e = np.array([eye_stats(m[idx])[0] for m in mesh_arr])
+        per_face_ear[name] = e
+        # per chord, not averaged: the two chords do not behave alike, and
+        # the average hid that when this check was first written
+        skew_a = float(np.mean([chord_skew_one(m[idx][lo:lo + 6], 0)
+                                for m in mesh_arr for lo in (0, 6)]))
+        skew_b = float(np.mean([chord_skew_one(m[idx][lo:lo + 6], 1)
+                                for m in mesh_arr for lo in (0, 6)]))
+        rows.append((name, e, float(np.mean(np.abs(e - ear_gt))),
+                     float(np.corrcoef(e, ear_gt)[0, 1]), skew_a, skew_b))
+    say(f"    {'mapping':<20} {'mean EAR':>9} {'|EAR-gt|':>9} {'corr':>7} "
+        f"{'skew outer':>11} {'skew inner':>11}")
+    say(f"    {'ground truth':<20} {ear_gt.mean():9.4f} {0.0:9.4f} "
+        f"{1.0:7.3f} {skew_gt:11.4f} {'':>11}")
+    for name, e, mae, r, sa, sb in rows:
+        say(f"    {name:<20} {e.mean():9.4f} {mae:9.4f} {r:7.3f} "
+            f"{sa:11.4f} {sb:11.4f}")
+    say("    skew is the chord's tilt away from perpendicular to the corner "
+        "axis, in eye widths; outer is the p1-p5 chord, inner is p2-p4.")
+
+    # correlation differences carry a confidence interval, because two point
+    # estimates a few hundredths apart decide nothing on their own
+    say("\n  correlation difference against the configured mapping "
+        f"(paired bootstrap over faces, {BOOTSTRAP_DRAWS} draws):")
+    rng = np.random.default_rng(seed)
+    base = per_face_ear["configured"]
+    corr_stats = {}
+    for name, e, _, r, _, _ in rows:
+        if name == "configured":
+            continue
+        draws = np.empty(BOOTSTRAP_DRAWS)
+        n = len(ear_gt)
+        for k in range(BOOTSTRAP_DRAWS):
+            j = rng.integers(0, n, n)
+            draws[k] = (np.corrcoef(e[j], ear_gt[j])[0, 1]
+                        - np.corrcoef(base[j], ear_gt[j])[0, 1])
+        lo, hi = np.percentile(draws, [2.5, 97.5])
+        verdict = ("better than configured" if lo > 0 else
+                   "worse than configured" if hi < 0 else
+                   "indistinguishable from configured")
+        say(f"    {name:<20} {draws.mean():+.4f}  95% CI "
+            f"[{lo:+.4f}, {hi:+.4f}]  {verdict}")
+        corr_stats[name] = {"delta": float(draws.mean()), "ci95": [float(lo), float(hi)],
+                            "verdict": verdict}
+
+    np.save(out_dir / "ear_ground_truth.npy", ear_gt)
+    for name, e in per_face_ear.items():
+        if name != "ground truth":
+            np.save(out_dir / f"ear_{name.replace(' ', '_')}.npy", e)
 
     # ---- verdict -----------------------------------------------------------
     say("\n=== Verdict ===")
@@ -532,15 +585,15 @@ def verify(cfg: dict, schema, det, args, out_dir: Path) -> int:
         # the fitted mapping, recorded so a decision to adopt it can be
         # traced to the run that produced it. Fitted on THIS split.
         "proximity_optimal_indices": alt_indices,
-        "nme_configured_pct": float(nme_cfg.mean()),
-        "nme_proximity_optimal_pct": float(nme_alt.mean()),
-        "nme_paired": st_nme,
-        "ear": {"gt_mean": float(ear_gt.mean()),
-                "configured": {"mean": float(ear_cfg.mean()), "mae_vs_gt": a_cfg,
-                               "corr_vs_gt": r_cfg, "chord_skew": skew_cfg},
-                "proximity_optimal": {"mean": float(ear_alt.mean()), "mae_vs_gt": a_alt,
-                                      "corr_vs_gt": r_alt, "chord_skew": skew_alt},
-                "gt_chord_skew": skew_gt},
+        "nme_by_mapping_pct": {name: float(per_face_nme[name][0].mean())
+                               for name, _ in candidates},
+        "nme_paired_configured_vs_proximity": st_nme,
+        "ear": {"gt_mean": float(ear_gt.mean()), "gt_chord_skew": skew_gt,
+                "by_mapping": {name: {"mean": float(e.mean()), "mae_vs_gt": mae,
+                                      "corr_vs_gt": r, "skew_outer_chord": sa,
+                                      "skew_inner_chord": sb}
+                               for name, e, mae, r, sa, sb in rows},
+                "corr_difference_vs_configured": corr_stats},
         "verdict": "fail" if failed else "pass",
     }
     with open(out_dir / "mediapipe_mapping.yaml", "w") as f:

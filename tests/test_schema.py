@@ -132,28 +132,37 @@ def test_malformed_schemas_are_rejected():
     _expect_schema_error(bad, "entries out of output order")
 
 
-def test_optional_alternative_mediapipe_mapping():
-    """indices_alt is optional, validated the same way as indices, and absent
-    by default: the project ships one mapping, and the second exists only for
-    a sensitivity check."""
+def test_optional_alternative_mediapipe_mappings():
+    """indices_alt is optional, takes one list or several named lists, is
+    validated like indices, and is absent by default: the project ships one
+    mapping and the others exist only for a sensitivity check."""
     import tempfile
 
     import yaml as _yaml
 
     raw = _yaml.safe_load(SCHEMA_PATH.read_text())
-    assert load_schema(SCHEMA_PATH).mediapipe_indices_alt is None
+    assert load_schema(SCHEMA_PATH).mediapipe_alt_maps == ()
 
     good = list(raw["mediapipe"]["indices"])
     good[2] = 157
+    mixed = list(raw["mediapipe"]["indices"])
+    mixed[5], mixed[10] = 163, 390
+    # compared as dicts: yaml round-tripping does not preserve key order
+    cases = [(good, True, {"alt": tuple(good)}),
+             ({"proximity": good, "mixed": mixed}, True,
+              {"proximity": tuple(good), "mixed": tuple(mixed)}),
+             (good[:10], False, None),
+             ([9999] * 24, False, None),
+             ({"bad": good[:3]}, False, None)]
     with tempfile.TemporaryDirectory() as tmp:
-        for alt, ok in ((good, True), (good[:10], False), ([9999] * 24, False)):
+        for alt, ok, expected in cases:
             path = Path(tmp) / "schema.yaml"
             raw["mediapipe"]["indices_alt"] = alt
             path.write_text(_yaml.safe_dump(raw))
             try:
                 loaded = load_schema(path)
             except SchemaError:
-                assert not ok, "a valid indices_alt was rejected"
+                assert not ok, f"a valid indices_alt was rejected: {alt}"
                 continue
-            assert ok, "an invalid indices_alt was accepted"
-            assert loaded.mediapipe_indices_alt == tuple(alt)
+            assert ok, f"an invalid indices_alt was accepted: {alt}"
+            assert dict(loaded.mediapipe_alt_maps) == expected

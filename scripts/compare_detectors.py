@@ -199,6 +199,11 @@ def main() -> int:
     targets: dict[str, wflw.FaceRecord] = {}
     for rel, recs in by_image.items():
         targets[rel] = max(recs, key=lambda r: square_box_around(r.landmarks98, 1.0).side)
+    # target size as a fraction of the shorter image side, filled in as frames
+    # are read. Detection rate on full WFLW frames is strongly size dependent
+    # for both front ends, for different reasons, so the aggregate rate on its
+    # own says as much about the dataset as about the detector.
+    face_frac: dict[str, float] = {}
 
     frames_cache: dict[str, np.ndarray] = {}
     preview_rels = set(rng.sample(images, min(250, len(images))))
@@ -211,15 +216,15 @@ def main() -> int:
         # the landmark model on identical inputs, which is the comparison the
         # project is about. Without it a detector gap reads as a model gap.
         detectors["ours_on_mp_box"] = OurModelOnMediaPipeBox(cfg, ours, mp_det)
-        if SCHEMA.mediapipe_indices_alt is not None:
-            # A second index selection off the same mesh, present only to show
+        for alt_name, alt_idx in SCHEMA.mediapipe_alt_maps:
+            # Further index selections off the same mesh, present only to show
             # whether the mapping choice, rather than the landmark models,
-            # could decide this table. Its timing is meaningless (it re-runs
-            # MediaPipe's inference) and it is not the project's mapping.
-            detectors["mediapipe_alt_map"] = mp_det.remapped(
-                SCHEMA.mediapipe_indices_alt, "mediapipe_alt_map")
-            say(f"second mapping present in the schema, scoring it too: "
-                f"{list(SCHEMA.mediapipe_indices_alt)}")
+            # could decide this table. Their timing is meaningless (each
+            # re-runs MediaPipe's inference) and none is the project's mapping.
+            row = f"mediapipe_map_{alt_name}"
+            detectors[row] = mp_det.remapped(alt_idx, row)
+            say(f"schema declares a second mapping '{alt_name}', scoring it "
+                f"too: {list(alt_idx)}")
 
     results = {n: {} for n in detectors}         # rel -> (nme, pts) for matches
     misses = {n: [] for n in detectors}
@@ -232,6 +237,8 @@ def main() -> int:
         if frame is None:
             raise wflw.WFLWError(f"cv2 could not decode {rel}")
         gt24 = targets[rel].landmarks98[SCHEMA.wflw_indices].astype(np.float64)
+        face_frac[rel] = float(square_box_around(targets[rel].landmarks98, 1.0).side
+                               / max(1, min(frame.shape[0], frame.shape[1])))
         for name, det in detectors.items():
             t0 = time.perf_counter()
             out = det.detect(frame)
@@ -305,6 +312,28 @@ def main() -> int:
                        per_subset, times[name], threshold)
         say(f"    detected-but-not-target frames: {unmatched[name]}")
 
+    # ---- 3b: detection rate against target face size -----------------------
+    say("\n  detection rate by target face size (fraction of the shorter "
+        "image side). A single aggregate rate on WFLW mixes detector quality "
+        "with how well each front end's operating assumptions match web "
+        "photography; the cabin sits in the largest bin.")
+    bins = [(0.00, 0.15), (0.15, 0.25), (0.25, 0.40), (0.40, 1.01)]
+    header = "    " + f"{'size band':<14}" + f"{'n':>6}" + "".join(
+        f"{n:>20}" for n in detectors)
+    say(header)
+    size_table = {}
+    for lo, hi in bins:
+        sel = [r for r in images if lo <= face_frac.get(r, -1) < hi]
+        if not sel:
+            continue
+        row = f"    {f'{lo:.2f} to {hi:.2f}':<14}{len(sel):>6}"
+        size_table[f"{lo:.2f}-{hi:.2f}"] = {"n": len(sel)}
+        for name in detectors:
+            hit = sum(1 for r in sel if r in results[name])
+            row += f"{100 * hit / len(sel):>19.1f}%"
+            size_table[f"{lo:.2f}-{hi:.2f}"][name] = float(100 * hit / len(sel))
+        say(row)
+
     paired_stats = None
     if mp_det is not None:
         joint = sorted(set(results["ours"]) & set(results["mediapipe"]))
@@ -335,22 +364,24 @@ def main() -> int:
                             "ours_win_rate_pct": float(100 * np.mean(a < b))}
             np.save(out_dir / "paired_ours_nme.npy", a)
             np.save(out_dir / "paired_mediapipe_nme.npy", b)
-            if "mediapipe_alt_map" in detectors:
-                alt_joint = [r for r in joint if r in results["mediapipe_alt_map"]]
-                if alt_joint:
-                    a2 = np.array([results["ours"][r][0] for r in alt_joint])
-                    b2 = np.array([results["mediapipe"][r][0] for r in alt_joint])
-                    c2 = np.array([results["mediapipe_alt_map"][r][0]
-                                   for r in alt_joint])
-                    say(f"\n  mapping sensitivity (n={len(alt_joint)}): our "
-                        f"margin over MediaPipe is "
-                        f"{100 * (b2 - a2).mean():+.3f} NME points under the "
-                        f"schema mapping and {100 * (c2 - a2).mean():+.3f} "
-                        "under the second mapping. If the sign and the "
-                        "conclusion hold across both, the index choice is not "
-                        "what decides this comparison.")
-                    paired_stats["margin_schema_mapping"] = float(100 * (b2 - a2).mean())
-                    paired_stats["margin_alt_mapping"] = float(100 * (c2 - a2).mean())
+            alt_rows = [n for n in detectors if n.startswith("mediapipe_map_")]
+            if alt_rows:
+                say("\n  mapping sensitivity: our margin over MediaPipe under "
+                    "each index mapping, on the faces both matched. If the "
+                    "sign and the conclusion hold across all of them, the "
+                    "index choice is not what decided this comparison.")
+                margins = {}
+                for row in ["mediapipe"] + alt_rows:
+                    rows_joint = [r for r in joint if r in results[row]]
+                    if not rows_joint:
+                        continue
+                    a2 = np.array([results["ours"][r][0] for r in rows_joint])
+                    b2 = np.array([results[row][r][0] for r in rows_joint])
+                    label = "schema mapping" if row == "mediapipe" else row
+                    say(f"    {label:<28} {100 * (b2 - a2).mean():+.3f} NME "
+                        f"points (n={len(rows_joint)})")
+                    margins[label] = float(100 * (b2 - a2).mean())
+                paired_stats["margins_by_mapping"] = margins
 
     # ---- 4: the calibration price (GT box vs Haar box, our model) ---------
     say("\n=== Our model: ground-truth boxes vs the Haar pipeline ===")
@@ -402,6 +433,7 @@ def main() -> int:
                           "ms_median": float(np.median(times[n]))}
                       for n in detectors},
         "paired": paired_stats,
+        "detection_by_face_size": size_table,
     }
     with open(out_dir / "m6_results.yaml", "w") as f:
         yaml.safe_dump(yaml_out, f, sort_keys=False)
