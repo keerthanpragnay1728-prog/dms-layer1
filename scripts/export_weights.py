@@ -19,17 +19,37 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dms_layer1.config import load_config
-from dms_layer1.model.io import export_weights
+from dms_layer1.model.io import export_weights, restamp_weights
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", required=True)
-    ap.add_argument("--checkpoint", required=True)
+    ap.add_argument("--checkpoint", help="training checkpoint to export")
     ap.add_argument("--out", default="/kaggle/working/landmarks24.pt")
+    ap.add_argument("--restamp", metavar="WEIGHTS.pt",
+                    help="add a train_meta record to an already exported file "
+                         "that has none, taken from --config's training "
+                         "section and marked as stamped after the fact. "
+                         "Weights are not touched.")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    if args.restamp:
+        stamped = restamp_weights(args.restamp, cfg, Path(args.config).name)
+        print(f"restamped {args.restamp} from {args.config}:")
+        for k, v in stamped.items():
+            print(f"    {k}: {v}")
+        print("This is a record of what you assert the file was trained with, "
+              "not the trainer's own stamp, and it is labelled as such "
+              "wherever the weights are described. Point --config at the "
+              "RUN's config_used.yaml, not at the base config: the base "
+              "config's loss and framing are whatever was last edited there, "
+              "and stamping those onto an old file would replace one wrong "
+              "provenance claim with another.")
+        return 0
+    if not args.checkpoint:
+        ap.error("--checkpoint is required unless --restamp is given")
     summary = export_weights(args.checkpoint, cfg, args.out)
     print(f"checkpoint : {args.checkpoint}  ({summary['checkpoint_mb']} MB)")
     print(f"exported   : {summary['out_path']}  ({summary['exported_mb']} MB, "

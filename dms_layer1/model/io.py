@@ -46,10 +46,26 @@ def describe_weights(path, meta: dict) -> str:
     script that loads a model: milestone 6 wasted a run on stale uploaded
     weights that were indistinguishable from the new ones in the output."""
     tm = meta.get("train_meta") or {}
-    framing = (f"framing [{tm['framing'][0]:.2f}, {tm['framing'][1]:.2f}]"
-               if tm.get("framing") else
-               "framing UNRECORDED (trained before framing was tracked, so "
-               "assume the narrow [0.87, 1.18] envelope)")
+    if tm.get("framing"):
+        framing = f"framing [{tm['framing'][0]:.2f}, {tm['framing'][1]:.2f}]"
+        if tm.get("stamped_after_the_fact"):
+            framing += f" (stamped from {tm['stamped_after_the_fact']}, not by "
+            framing += "the trainer)"
+    elif meta.get("train_meta") is not None:
+        framing = ("framing NOT RECORDED: this file carries a train_meta "
+                   "record with no framing entry")
+    else:
+        # Never guess an envelope here. An export made before the record
+        # existed says nothing about what it was trained on, and asserting
+        # the narrow envelope told one user the opposite of the truth about
+        # their own model.
+        framing = ("framing NOT RECORDED: this file has no train_meta record, "
+                   "which means it was exported before provenance was "
+                   "stamped, NOT that it was trained narrow. The training "
+                   "run's config_used.yaml records train.augment.framing; "
+                   "re-export from the checkpoint, or restamp with "
+                   "scripts/export_weights.py --restamp, to make the file "
+                   "self-describing")
     val = f"{meta['val_nme']:.3f}%" if meta.get("val_nme") is not None else "n/a"
     return (f"weights: {path}\n"
             f"         trained epoch {meta.get('epoch')}, val NME {val}, "
@@ -151,6 +167,12 @@ def export_weights(checkpoint_path: str | Path, cfg: dict,
     model, meta = load_model(checkpoint_path, cfg)
     model.eval()
 
+    if meta.get("train_meta") is None:
+        print(f"WARNING: {checkpoint_path.name} carries no train_meta record, "
+              "so the exported file cannot say which framing envelope, loss "
+              "or seed produced it. Every script that loads it will say so "
+              "rather than guess. Export from a checkpoint written by the "
+              "current trainer, or add the record with --restamp.")
     payload = {
         "model": model.state_dict(),
         "arch": model.arch,
@@ -178,3 +200,46 @@ def export_weights(checkpoint_path: str | Path, cfg: dict,
             "params": sum(p.numel() for p in model.parameters()),
             "trained_epoch": meta["epoch"], "val_nme": meta["val_nme"],
             "out_path": str(out_path)}
+
+
+def restamp_weights(weights_path: str | Path, cfg: dict,
+                    config_name: str) -> dict:
+    """Add a train_meta record to an exported file that has none.
+
+    Exports made before the trainer stamped provenance carry no framing
+    envelope, and a file that cannot say what it is gets described as
+    unknown by every script that loads it. This writes the record from the
+    training config the user names, and marks it as stamped after the fact
+    so it is never mistaken for the trainer's own record. It changes no
+    weights; the state dict is written back unchanged.
+    """
+    weights_path = Path(weights_path)
+    ck = torch.load(weights_path, map_location="cpu", weights_only=False)
+    if "model" not in ck:
+        raise ValueError(f"{weights_path} is not a weights file from this project")
+    existing = ck.get("train_meta")
+    if existing and existing.get("framing"):
+        raise ValueError(
+            f"{weights_path} already records framing "
+            f"{existing['framing']}; refusing to overwrite a real record.")
+    def optional(key, cast):
+        """Record only what the named config actually contains. A run config
+        that predates a setting should leave a gap rather than have one
+        invented, which is the mistake this whole feature exists to undo."""
+        try:
+            return cast(require(cfg, key))
+        except Exception:
+            return None
+
+    framing = require(cfg, "train.augment.framing")
+    record = {
+        "framing": [float(framing[0]), float(framing[1])],
+        "reference_expand": optional("preprocess.reference_expand", float),
+        "cache_expand": optional("preprocess.crop_expand", float),
+        "loss": optional("train.loss", str),
+        "seed": optional("seed", int),
+        "stamped_after_the_fact": config_name,
+    }
+    ck["train_meta"] = {k: v for k, v in record.items() if v is not None}
+    torch.save(ck, weights_path)
+    return ck["train_meta"]

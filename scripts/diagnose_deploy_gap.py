@@ -56,6 +56,7 @@ from dms_layer1.evaluation import metrics
 from dms_layer1.landmarks.schema import load_schema
 from dms_layer1.model.io import describe_weights
 
+BOX24_EXPANDS = [1.30, 1.45, 1.60, 1.75, 1.90, 2.05]
 SCALE_CURVE = [1.0, 1.1, 1.2, 1.3, 1.4, 1.56, 1.7, 1.9]
 GRID_SCALES = [1.12, 1.30, 1.45, 1.60, 1.75]
 GRID_SHIFTS = [0.08, 0.13]
@@ -359,6 +360,36 @@ def main() -> int:
             if m.sum():
                 say(f"    {lo:.2f} to {hi:.2f}: {100 * dv[m].mean():6.3f}%  (n={m.sum()})")
 
+    # ---- 6. boxing from 24 landmarks, which is what a landmark front end
+    # ---- hands the model ---------------------------------------------------
+    say("\n=== 6. What expand a 24-POINT box needs ===")
+    say("  The Haar path frames the face with a calibrated transform of a "
+        "detector rectangle. A landmark-based front end (ours_on_mp_box, and "
+        "our own second refinement stage) instead boxes 24 points, which is a "
+        "different construction: the 24-point extent is not the 98-point "
+        "extent the cache was built from, so the same nominal expand does not "
+        "produce the same framing. Ground-truth points are used here so this "
+        "measures the BOX GEOMETRY with detector error removed.")
+    say(f"  {'expand':>7} {'implied k':>10} {'NME':>26}")
+    box24_rows = []
+    for e in BOX24_EXPANDS:
+        vals, ks = [], []
+        for rel in sample:
+            box = square_box_around(gt24[rel], e)
+            vals.append(nme(run_model(grays[rel], box), gt24[rel]))
+            ks.append(box.side / max(gt_box[rel].side, 1e-9))
+        box24_rows.append({"expand": e, "k_median": round(float(np.median(ks)), 3),
+                           "nme_pct_mean": round(100 * float(np.mean(vals)), 3)})
+        say(f"  {e:>7.2f} {float(np.median(ks)):>10.3f} {nme_stats(vals):>40}")
+    best24 = min(box24_rows, key=lambda r: r["nme_pct_mean"])
+    say(f"  best: expand {best24['expand']:.2f} (k = {best24['k_median']:.3f}) "
+        f"at {best24['nme_pct_mean']:.3f}%")
+    say("  Set detector.cross_expand and detector.refine_expand from this, the "
+        "same way box_scale was set from section 3. A landmark front end left "
+        "at the nominal reference_expand is an UNCALIBRATED path, and "
+        "comparing it against the calibrated Haar path measures the missing "
+        "calibration rather than the front end.")
+
     results = {
         "n_images": len(images),
         "any_box_all_faces_pct": round(100 * per_face_hits / max(1, per_face_total), 2),
@@ -371,6 +402,7 @@ def main() -> int:
         "calibration_grid": grid_rows,
         "refinement_grid": refine_rows,
         "refine_expand_sweep": exp_rows,
+        "box_from_24_points_sweep": box24_rows,
         "best_end_to_end": {"box_scale": best[1], "box_shift_y": best[2],
                             "nme_pct": round(100 * best[0], 3)},
         "residual_decomposition": {k: round(100 * float(np.mean(v)), 3)

@@ -290,6 +290,29 @@ whole-pipeline timing as separate numbers, and state whether detection runs
 every frame or is amortised by tracking, or the speed claim will be wrong in
 one direction or the other.
 
+## The guard's own message was wrong
+
+The stale-weights guard told a user their framing-aware model had been
+trained on the narrow envelope. The export was made before `export_weights`
+carried `train_meta` (added in d88db7a), so the file genuinely had no record,
+and `describe_weights` filled the gap with "assume the narrow [0.87, 1.18]
+envelope". That assumption was false for this file and stated as fact.
+
+Fixed three ways. The message now distinguishes no record at all from a
+record with no framing entry, and in neither case guesses an envelope: it
+says the file cannot describe itself and points at the run's
+config_used.yaml. `export_weights` warns loudly when the checkpoint it is
+exporting has no record, so a provenance-less export cannot be produced
+quietly again. And `scripts/export_weights.py --restamp` adds the record to
+an existing file from a named config, marked `stamped_after_the_fact` so it
+prints as "stamped from <config>, not by the trainer" and can never be
+confused with the trainer's own stamp.
+
+The general lesson for the report: a provenance guard that fills a gap with
+an assumption is worse than one that says the gap exists. The first time this
+guard fired on a file it did not understand, it produced a confident false
+statement about the model under test.
+
 ## Guard added after a wasted run
 
 A diagnostic run auto-loaded stale uploaded weights and reproduced the old
@@ -569,3 +592,103 @@ contour points in any semantic sense. The group exists to give Layer 2 a
 left/right yaw asymmetry rather than a precise measurement, and the offset
 from WFLW's contour parameterisation is a documented number rather than
 something to chase.
+
+## Reading the full ablation: three things the first table could not say
+
+The full-split run (n = 2118, jointly matched 408) produced three results
+that each need care before they are written up.
+
+### 1. ours_on_mp_box is worse than ours, and the table cannot yet say why
+
+The numbers were 13.776% for the component-swap row against 9.569% for our
+own Haar path, which invites the reading that the model is coupled to the
+crop geometry our calibration produces rather than merely to face location.
+That reading may well be right, but two confounds sit in front of it and both
+are now measured rather than reasoned about.
+
+**Different populations.** Each per-detector row is scored on the faces THAT
+path found. A Haar cascade only fires on near-frontal faces, so its matched
+set is filtered easy; MediaPipe's matched set includes profiles and harder
+poses that it can still track and our model cannot. Comparing 9.569% on one
+population against 13.776% on another measures the populations as much as the
+pipelines. `scripts/compare_detectors.py` section 4 now fixes the faces
+first: every row, plus a ground-truth-box ceiling row, scored on the faces
+every path found.
+
+**An uncalibrated path.** The Haar path's framing was chosen on end NME:
+box_scale and box_shift_y came out of the calibration grid. The component-swap
+path was never calibrated. It boxes MediaPipe's 24 points at the nominal
+`reference_expand`, and a box around 24 points is not the box around 98 points
+the cache was built from, so the same nominal number does not produce the same
+framing. The ablation now prints the framing factor each path actually
+delivers, measured against the canonical ground-truth box on the same face,
+and `diagnose_deploy_gap.py` section 6 sweeps the expand a 24-point box needs,
+using ground-truth points so detector error is out of the way.
+
+There is also a specific hypothesis worth testing against that sweep. Training
+samples the framing factor uniformly over [0.85, 1.60], so most of the mass
+sits near 1.2 rather than at 1.0, and the Haar calibration may simply have
+found that centre empirically while the component-swap path sits at the low
+edge. If section 6 puts the best 24-point expand near the Haar path's measured
+framing, the deficit is a missing calibration and the swap framing survives.
+
+What is true either way, and belongs in the report: a crop-based regressor has
+a preferred crop geometry, so every front end that feeds it needs its own
+calibration to that geometry. Swapping the detector is not free, and the cost
+is a calibration step rather than a line of code. That is a real limitation of
+the design and is worth stating plainly. It is a weaker claim than "the model
+cannot be treated as independent of its detector", and it is the one the
+evidence currently supports.
+
+`detector.cross_expand` is now a config value. Left at `auto` the path runs at
+the nominal framing and prints that it is uncalibrated, so the row can never
+again be read as a like-for-like swap without someone noticing.
+
+### 2. The headline stays unweighted, and the ex-contour number is reported too
+
+Per-point offsets run 5 to 7% of IOD on eyelids, pupils and mouth, and 15 to
+25% on contour, so contour drags the aggregate. Down-weighting the group we
+care least about, after seeing the results, is where special pleading starts,
+so the headline stays the standard unweighted mean over 24 points. It is what
+milestone 5 reports, it is what the WFLW literature reports, and changing the
+definition to suit the result would cost more credibility than the points are
+worth.
+
+Two things sit next to it. Per-group NME is now in the ablation table for
+every row, which is where a reader looks to see that the aggregate is carried
+by one group. And the aggregate excluding contour is reported as a secondary
+number, with the reason it is not a thumb on the scale: contour is where
+WFLW's parameterisation and MediaPipe's face oval disagree most, so removing
+it helps MediaPipe more than it helps us. Stating which way the alternative
+metric moves the result is what separates a disclosed sensitivity from
+special pleading, and here it moves against us.
+
+If a task-weighted number is wanted at all, it has to be defined from what
+Layer 2 consumes before the results are looked at, and labelled as a task
+metric rather than as NME.
+
+### 3. Detection rate: one sentence, and it does not lead with the aggregate
+
+The aggregate ordering is ours 38.29% against MediaPipe 29.46%, and it
+reverses in the regime this project is built for:
+
+| target size, fraction of the shorter side | ours | mediapipe |
+|-------------------------------------------|------|-----------|
+| 0.00 to 0.15 | 30.0% | 4.5% |
+| 0.15 to 0.25 | 38.2% | 42.6% |
+| 0.25 to 0.40 | 55.8% | 71.6% |
+| 0.40 to 1.01 | 65.6% | 83.8% |
+
+The honest summary for the report:
+
+> On full WFLW frames our Haar front end acquires the target face in 38.3% of
+> images against MediaPipe's 29.5%, but that ordering is a property of the
+> dataset rather than of the detectors: MediaPipe's near-range detector finds
+> 4.5% of faces smaller than 0.15 of the frame and 83.8% of those larger than
+> 0.40, so in the size band a driver's face occupies it leads 83.8% to 65.6%,
+> and our aggregate lead comes entirely from small faces that a cabin camera
+> never sees.
+
+Leading with the aggregate would state a lead that reverses in deployment,
+which is the worst kind of claim to have to defend. The size table goes in the
+report next to the sentence.

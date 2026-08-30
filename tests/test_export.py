@@ -84,3 +84,41 @@ def test_arch_mismatch_fails_clearly():
             assert "mismatch" in str(e)
         else:
             raise AssertionError("expected ValueError for architecture mismatch")
+
+
+def test_export_carries_the_training_record_and_restamp_fills_a_gap():
+    """The export must carry the framing envelope: a file that cannot say what
+    it is gets described as unknown, and the guard once filled that gap with a
+    false assumption."""
+    import torch
+
+    from dms_layer1.model.io import _meta_of, describe_weights, restamp_weights
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        cache_dir = _build_test_cache(tmp)
+        cfg = _cfg(cache_dir, tmp / "run", epochs=1)
+        cfg["train"]["augment"]["framing"] = [0.9, 1.0]
+        Trainer(cfg).train()
+        out = tmp / "exported.pt"
+        export_weights(tmp / "run" / "ckpt" / "best.pth", cfg, out)
+        ck = torch.load(out, map_location="cpu", weights_only=False)
+        assert ck["train_meta"]["framing"] == [0.9, 1.0]
+        assert "framing [0.90, 1.00]" in describe_weights(out, _meta_of(ck))
+
+        # a file exported before the record existed can be restamped, and the
+        # stamp is marked as an assertion rather than the trainer's own
+        old = tmp / "old.pt"
+        torch.save({k: v for k, v in ck.items() if k != "train_meta"}, old)
+        assert "NOT RECORDED" in describe_weights(
+            old, _meta_of(torch.load(old, map_location="cpu", weights_only=False)))
+        restamp_weights(old, cfg, "run_config.yaml")
+        line = describe_weights(
+            old, _meta_of(torch.load(old, map_location="cpu", weights_only=False)))
+        assert "framing [0.90, 1.00]" in line and "not by the trainer" in line
+        try:
+            restamp_weights(old, cfg, "run_config.yaml")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("restamp overwrote a real record")

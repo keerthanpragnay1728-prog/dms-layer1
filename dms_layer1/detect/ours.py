@@ -56,7 +56,12 @@ class OurLandmarkDetector(LandmarkDetector):
         gray = as_gray(frame)
         box = self.haar.primary_crop_box(gray)
         if box is None:
+            self.last_stage1_box = None
             return None
+        # kept for diagnostics only: how a front end FRAMES the face is a
+        # separate question from where it finds it, and the ablation cannot
+        # separate them without seeing the box each path produced
+        self.last_stage1_box = box
         pts = self.predict_in_box(gray, box)
         for _ in range(self.refine_stages - 1):
             pts = self.predict_in_box(gray, square_box_around(pts, self.refine_expand))

@@ -153,8 +153,21 @@ def test_checkpoints_record_their_framing_envelope():
         assert meta["train_meta"]["loss"] == "wing"
         line = describe_weights(ckpt, meta)
         assert "framing [0.90, 1.00]" in line and "val NME" in line
-        # a file without the record says so rather than staying silent
-        assert "UNRECORDED" in describe_weights(ckpt, {"epoch": 1, "val_nme": None})
+        # A file without the record says so rather than staying silent, and
+        # must not guess an envelope: saying "assume the narrow one" once told
+        # a user the opposite of the truth about their own model.
+        none_line = describe_weights(ckpt, {"epoch": 1, "val_nme": None})
+        assert "NOT RECORDED" in none_line
+        assert "0.87" not in none_line and "assume" not in none_line.lower()
+        # a record that exists but has no framing entry is a third case
+        partial = describe_weights(ckpt, {"epoch": 1, "val_nme": None,
+                                          "train_meta": {"loss": "wing"}})
+        assert "NOT RECORDED" in partial and "no framing entry" in partial
+        # a record stamped after the fact says so
+        stamped = describe_weights(ckpt, {"epoch": 1, "val_nme": None,
+                                          "train_meta": {"framing": [0.85, 1.6],
+                                                         "stamped_after_the_fact": "run.yaml"}})
+        assert "framing [0.85, 1.60]" in stamped and "not by the trainer" in stamped
 
 
 def test_alternative_mapping_reads_the_same_mesh():

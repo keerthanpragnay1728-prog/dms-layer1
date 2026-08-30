@@ -47,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dms_layer1.config import load_config, require, resolve_path, save_config_snapshot
 from dms_layer1.data import wflw
-from dms_layer1.data.crops import extract_square, square_box_around, to_crop_space
+from dms_layer1.data.crops import square_box_around
 from dms_layer1.detect.interface import as_gray
 from dms_layer1.detect.cross import OurModelOnMediaPipeBox
 from dms_layer1.detect.ours import OurLandmarkDetector
@@ -227,9 +227,12 @@ def main() -> int:
                 f"too: {list(alt_idx)}")
 
     results = {n: {} for n in detectors}         # rel -> (nme, pts) for matches
+    results["ours_on_gt_box"] = {}               # the ceiling, not a detector
     misses = {n: [] for n in detectors}
     times = {n: [] for n in detectors}
     unmatched = {n: 0 for n in detectors}
+    framing_k = {n: [] for n in detectors}
+    expand = float(require(cfg, "preprocess.reference_expand"))
 
     for n_img, rel in enumerate(images, 1):
         frame = cv2.imread(str(wflw.image_path(paths, by_image[rel][0])),
@@ -239,10 +242,24 @@ def main() -> int:
         gt24 = targets[rel].landmarks98[SCHEMA.wflw_indices].astype(np.float64)
         face_frac[rel] = float(square_box_around(targets[rel].landmarks98, 1.0).side
                                / max(1, min(frame.shape[0], frame.shape[1])))
+        # The ceiling row: our model on the canonical ground-truth box, the
+        # same box training and the milestone-5 protocol use. Computed for
+        # every image so any subset below can be compared against it. It is
+        # not a detector; it uses ground truth and always "detects".
+        gt_box = square_box_around(targets[rel].landmarks98, expand)
+        gt_pred = ours.predict_in_box(as_gray(frame), gt_box)
+        results["ours_on_gt_box"][rel] = (
+            float(metrics.nme_per_face(gt_pred[None], gt24[None], SCHEMA)[0]),
+            gt_pred)
         for name, det in detectors.items():
             t0 = time.perf_counter()
             out = det.detect(frame)
             times[name].append((time.perf_counter() - t0) * 1000)
+            box = getattr(det, "last_stage1_box", None)
+            if box is not None:
+                # framing factor: the stage-1 crop side against the canonical
+                # box on the same face. k = 1.0 is what training saw.
+                framing_k[name].append(float(box.side / max(gt_box.side, 1e-9)))
             if out is None:
                 misses[name].append(rel)
             elif match_target(out.points.astype(np.float64), gt24):
@@ -383,34 +400,74 @@ def main() -> int:
                     margins[label] = float(100 * (b2 - a2).mean())
                 paired_stats["margins_by_mapping"] = margins
 
-    # ---- 4: the calibration price (GT box vs Haar box, our model) ---------
-    say("\n=== Our model: ground-truth boxes vs the Haar pipeline ===")
-    expand = float(require(cfg, "preprocess.reference_expand"))
-    gt_nmes = []
-    for rel in results["ours"]:
-        rec = targets[rel]
-        frame = frames_cache.get(rel)
-        if frame is None:
-            continue
-        gray = as_gray(frame)
-        box = square_box_around(rec.landmarks98, expand)
-        crop = extract_square(gray, box, ours.input_size)
-        x = (torch.from_numpy(np.ascontiguousarray(crop)).float() / 255.0
-             - ours.pixel_mean) / ours.pixel_std
-        with torch.no_grad():
-            pred01 = ours.model(x.unsqueeze(0).unsqueeze(0))[0].numpy().astype(np.float64)
-        gt24 = rec.landmarks98[SCHEMA.wflw_indices].astype(np.float64)
-        gt01 = to_crop_space(gt24, box)
-        gt_nmes.append((float(metrics.nme_per_face(pred01[None], gt01[None], SCHEMA)[0]),
-                        results["ours"][rel][0]))
-    if gt_nmes:
-        g = np.array([v for v, _ in gt_nmes])
-        hb = np.array([v for _, v in gt_nmes])
-        say(f"  same {len(gt_nmes)} faces (the preview-cached subset of matches):")
-        say(f"    GT-box NME   mean {100 * g.mean():.3f}%  median {100 * np.median(g):.3f}%")
-        say(f"    Haar-box NME mean {100 * hb.mean():.3f}%  median {100 * np.median(hb):.3f}%")
-        say(f"    calibration price: {100 * (hb.mean() - g.mean()):+.3f} NME points "
-            "(the deploy-resolution cost flagged in milestone 3)")
+    # ---- 4: everything on ONE population ----------------------------------
+    say("\n=== 4. All rows on the faces every path found ===")
+    say("  The per-detector rows above are each scored on the faces THAT "
+        "detector found, and those are different populations: a Haar cascade "
+        "only fires on near-frontal faces, so its matched set is filtered "
+        "easy, while MediaPipe's includes profiles it can still track. "
+        "Comparing rows across different populations measures the populations "
+        "as much as the pipelines. This section fixes the faces first.")
+    common = sorted(set.intersection(*[set(results[n]) for n in detectors])
+                    ) if detectors else []
+    if common:
+        say(f"\n  n = {len(common)} faces found by every path, plus the "
+            "ground-truth-box ceiling on the same faces")
+        say(f"    {'row':<20} {'NME mean':>9} {'median':>9} {'fail@10%':>9}"
+            + "".join(f"{g:>10}" for g in SCHEMA.groups))
+        common_stats = {}
+        for name in list(detectors) + ["ours_on_gt_box"]:
+            arr = np.array([results[name][r][0] for r in common])
+            pred = np.stack([results[name][r][1] for r in common])
+            gt = np.stack([targets[r].landmarks98[SCHEMA.wflw_indices]
+                           for r in common]).astype(np.float64)
+            groups = metrics.group_nme(pred, gt, SCHEMA)
+            row = (f"    {name:<20} {100 * arr.mean():8.3f}% "
+                   f"{100 * np.median(arr):8.3f}% "
+                   f"{100 * np.mean(arr > threshold):8.2f}%")
+            row += "".join(f"{100 * groups[g]:9.2f}%" for g in SCHEMA.groups)
+            say(row)
+            # the aggregate without contour: that group is where the two
+            # annotation conventions disagree most, so it moves MediaPipe more
+            # than it moves us. Reported both ways, never swapped silently.
+            keep = [i for i in range(24)
+                    if SCHEMA.points[i].group != "contour"]
+            ex = metrics.point_errors_norm(pred, gt, SCHEMA)[:, keep].mean(axis=1)
+            common_stats[name] = {
+                "nme_pct": float(100 * arr.mean()),
+                "nme_median_pct": float(100 * np.median(arr)),
+                "failure_pct": float(100 * np.mean(arr > threshold)),
+                "groups_pct": {g: float(100 * groups[g]) for g in SCHEMA.groups},
+                "nme_excluding_contour_pct": float(100 * ex.mean())}
+        say(f"\n    {'row':<20} {'NME':>9} {'NME without contour':>21}")
+        for name, st in common_stats.items():
+            say(f"    {name:<20} {st['nme_pct']:8.3f}% "
+                f"{st['nme_excluding_contour_pct']:20.3f}%")
+        say("    Contour is where WFLW's parameterisation and MediaPipe's face "
+            "oval disagree, so dropping it helps MediaPipe more than it helps "
+            "us. Both numbers are reported for that reason: the ex-contour one "
+            "is not the flattering choice.")
+
+    # framing: how each front end frames the face, not just where it finds it
+    say("\n  framing factor of the stage-1 crop, against the canonical "
+        "ground-truth box on the same face (k = 1.0 is what training saw):")
+    for name in detectors:
+        if framing_k[name]:
+            k = np.array(framing_k[name])
+            say(f"    {name:<20} median {np.median(k):.3f}  "
+                f"p10 {np.percentile(k, 10):.3f}  p90 {np.percentile(k, 90):.3f}")
+    say("    A path whose k sits outside the trained envelope is being asked "
+        "to work in a regime it never saw, which is a property of the BOX "
+        "each front end produces rather than of where the face is.")
+
+    # the calibration price, on the common population rather than a cache
+    if common:
+        g = np.array([results["ours_on_gt_box"][r][0] for r in common])
+        hb = np.array([results["ours"][r][0] for r in common])
+        say(f"\n  calibration price on those {len(common)} faces: "
+            f"GT box {100 * g.mean():.3f}% against Haar box "
+            f"{100 * hb.mean():.3f}%, {100 * (hb.mean() - g.mean()):+.3f} NME "
+            "points. That is what the deployed acquisition costs the model.")
 
     # ---- 5: footprints -----------------------------------------------------
     say("\n=== Footprints ===")
@@ -434,6 +491,9 @@ def main() -> int:
                       for n in detectors},
         "paired": paired_stats,
         "detection_by_face_size": size_table,
+        "common_population": {"n": len(common), "rows": common_stats} if common else None,
+        "framing_k_median": {n: float(np.median(framing_k[n]))
+                             for n in detectors if framing_k[n]},
     }
     with open(out_dir / "m6_results.yaml", "w") as f:
         yaml.safe_dump(yaml_out, f, sort_keys=False)
