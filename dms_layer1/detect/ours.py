@@ -16,7 +16,7 @@ import torch
 from dms_layer1.config import require
 from dms_layer1.data.crops import (CropBox, extract_square, square_box_around,
                                    to_frame_space)
-from dms_layer1.detect.haar import HaarFaceDetector
+from dms_layer1.detect.haar import HaarFaceDetector, haar_to_crop_box
 from dms_layer1.detect.interface import LandmarkDetector, Landmarks24, as_gray
 from dms_layer1.model.io import describe_weights, load_model, resolve_weights
 
@@ -54,15 +54,26 @@ class OurLandmarkDetector(LandmarkDetector):
 
     def detect(self, frame: np.ndarray) -> Landmarks24 | None:
         gray = as_gray(frame)
-        box = self.haar.primary_crop_box(gray)
-        if box is None:
-            self.last_stage1_box = None
+        # select() then haar_to_crop_box() is exactly what primary_crop_box
+        # does; spelled out so the raw detector rectangle can be recorded
+        # without running the cascade a second time.
+        raw = self.haar.select(gray)
+        if raw is None:
+            self.last_haar_box = self.last_stage1_box = None
+            self.last_boxes = []
             return None
-        # kept for diagnostics only: how a front end FRAMES the face is a
-        # separate question from where it finds it, and the ablation cannot
-        # separate them without seeing the box each path produced
+        box = haar_to_crop_box(raw, self.haar.box_scale, self.haar.box_shift_y,
+                               self.haar.box_shift_x)
+        # kept for diagnostics and for the live viewer: how a front end FRAMES
+        # the face is a separate question from where it finds it, and neither
+        # the ablation nor a demo can separate them without seeing the boxes
+        # each stage produced
+        self.last_haar_box = raw
         self.last_stage1_box = box
+        self.last_boxes = [box]
         pts = self.predict_in_box(gray, box)
         for _ in range(self.refine_stages - 1):
-            pts = self.predict_in_box(gray, square_box_around(pts, self.refine_expand))
+            box = square_box_around(pts, self.refine_expand)
+            self.last_boxes.append(box)
+            pts = self.predict_in_box(gray, box)
         return Landmarks24(points=pts.astype(np.float32), source=self.name)
