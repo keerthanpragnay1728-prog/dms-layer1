@@ -31,7 +31,7 @@ Keys:
     q or Esc quit
 
 Usage (Windows):
-    python scripts\\live_demo.py --config configs\\layer1_base.yaml ^
+    python scripts\\webcam_demo.py --config configs\\layer1_base.yaml ^
         --weights landmarks24_framing.pt
 """
 

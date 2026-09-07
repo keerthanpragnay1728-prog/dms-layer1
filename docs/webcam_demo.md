@@ -1,6 +1,6 @@
 # Running the model live on a webcam
 
-`scripts/live_demo.py` runs the deployed pipeline on a camera and draws what
+`scripts/webcam_demo.py` runs the deployed pipeline on a camera and draws what
 it is doing: the Haar rectangle the cascade selected, the stage-2 box
 refinement rebuilt from the stage-1 points, the 24 landmarks in their schema
 group colours, the eye aspect ratio Layer 2 would consume, the loop rate, and
