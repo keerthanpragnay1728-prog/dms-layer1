@@ -1,0 +1,256 @@
+# =============================================================================
+# Base config for Layer 1 experiments.
+#
+# Every script takes --config and reads ONLY from here (plus the landmark
+# schema file this points at). No hardcoded paths or magic numbers in code.
+# Every experiment output is written together with a copy of the config that
+# produced it, so any reported number can be reconstructed.
+# =============================================================================
+
+# Global RNG seed: python `random`, numpy, and (from milestone 4) torch.
+# Documented in README. Change it only as a deliberate experiment.
+seed: 42
+
+# Path to the 24-point schema + WFLW index mapping. Relative paths are
+# resolved against the directory containing THIS config file.
+landmark_schema: landmarks_24.yaml
+
+dataset:
+  # Kaggle mount of the public WFLW dataset. On a different machine, point
+  # this at your local WFLW root instead; the loader fails with a clear
+  # message (listing what it found) if the layout underneath is wrong.
+  root: /kaggle/input/datasets/mrriandmstique/wflw-wider-facial-landmarks-in-the-wild
+  images_dir: WFLW_images
+  annotations_dir: WFLW_annotations
+  # The two full annotation files (98 coords + face rect + 6 attribute flags
+  # + image path per line), relative to annotations_dir.
+  train_list: list_98pt_rect_attr_train_test/list_98pt_rect_attr_train.txt
+  test_list: list_98pt_rect_attr_train_test/list_98pt_rect_attr_test.txt
+  # The 6 binary attribute columns, in file order. Also used to derive the
+  # official test subsets (pose -> "largepose" etc.).
+  attribute_names: [pose, expression, illumination, makeup, occlusion, blur]
+
+# ----- milestone 1: mapping visualisation ------------------------------------
+visualize:
+  split: test          # which annotation list to sample from
+  num_frontal: 4       # faces with no pose/occlusion flag
+  num_largepose: 4     # faces with the pose flag (profile-ish)
+  num_occluded: 4      # faces with the occlusion flag
+  out_dir: /kaggle/working/m1_overlays
+  inset_size: 320      # pixel width of the zoomed eye/mouth insets
+
+# ----- milestone 2: crop cache (one-time preprocess; see data/cache.py) -----
+preprocess:
+  # Two different jobs, kept separate since the milestone-6 framing finding:
+  #   reference_expand is the CANONICAL framing (k = 1.0). It defines what
+  #     the model treats as a normally framed face, what the milestone-5
+  #     protocol evaluates, and what the Haar calibration is measured
+  #     against. Do not change it: every recorded number assumes 1.3.
+  #   crop_expand is how much CONTEXT the cache stores around that box, so
+  #     framing augmentation has real image to zoom out into instead of
+  #     zero padding. It must cover max(train.augment.framing) *
+  #     reference_expand; the trainer refuses to run if it does not.
+  reference_expand: 1.30
+  crop_expand: 2.20    # 2.2 = 1.3 x 1.69, covers framing up to k = 1.69
+  cache_size: 224      # keeps the canonical region at 224 * 1.3/2.2 = 132 px,
+                       # comparable to the 128 px of the milestone-2 cache so
+                       # the k = 1.0 numbers stay comparable across rebuilds
+  num_preview: 16      # crops rendered per split for the eyeball check
+  out_dir: /kaggle/working/cache   # where build_crop_cache WRITES
+
+# Where training/evaluation READS the built cache. Kaggle mount paths vary
+# by attachment kind (dataset: /kaggle/input/<slug>/...; notebook output:
+# /kaggle/input/notebooks/<user>/<slug>/cache), so the default 'auto'
+# searches /kaggle/input for the cache files and uses a single unambiguous
+# hit (with a printed note). Set an explicit path to pin it, e.g. locally
+# or when several caches are attached.
+cache:
+  dir: auto
+
+# ----- milestone 3: Haar face detection front-end ----------------------------
+face_detector:
+  # resolved from this repo's assets/ (vendored copy), cv2.data as fallback
+  haar_cascade: haarcascade_frontalface_default.xml
+  # Operating point adopted from the pose sweep (scripts/sweep_haar_pose.py,
+  # decision recorded in docs/milestone3_notes.md): vs the old (1.10, 5) it
+  # lifts pose detection 17.8% -> 33.7% and no-flag 79.8% -> 86.8% at about
+  # 157 ms/image, costing unmatched boxes (1.80 -> 5.00 per image). That cost
+  # is now known to hurt face SELECTION, which is why the rule below exists;
+  # scripts/diagnose_face_selection.py re-scores these settings for the
+  # one-box-per-frame objective deployment actually has.
+  scale_factor: 1.05   # detectMultiScale pyramid step
+  min_neighbors: 5     # raised from 2 after the selection diagnostic: the
+                       # three candidate settings are statistically TIED on
+                       # the realized (confidence-selected) rate at n=600,
+                       # so the choice falls to the secondary criteria, and
+                       # 1.05/5 keeps the oracle high (69.2% vs 61.8% at
+                       # 1.10/5, a significant 11 points) at the same latency
+                       # as 1.05/2 while halving the spurious boxes
+  min_size_frac: 0.08  # min face side as a fraction of min(image h, w)
+  equalize_hist: true  # histogram-equalise before detection
+  # Calibration from a raw Haar box to the model's crop box: side =
+  # max(w, h) * box_scale, centre offset by (box_shift_x, box_shift_y) * side.
+  #
+  # Chosen on END-TO-END NME with refinement on, not on stage-1 NME, and the
+  # two disagree sharply. Stage 1 alone prefers (1.30, 0.11) at 10.820%;
+  # end to end, (1.60, 0.00) wins at 9.879% while scoring 16.488% at stage 1,
+  # nearly the worst box in the grid. A wide, deliberately un-shifted box
+  # contains the face reliably, and stage 2 rebuilds a well-framed box from
+  # the points found inside it. The stage-1 box and refinement are ONE
+  # decision; optimising the first alone leaves about a point on the table.
+  # Ceiling on the same faces is 7.187%. Grid and reasoning in
+  # docs/milestone6_findings.md.
+  box_scale: 1.60
+  box_shift_y: 0.00
+  # Horizontal offset, same units. MEASURED AND REJECTED, not left at zero by
+  # default: section 5b puts the horizontal bias at +0.0008 of a box side on
+  # frontal faces against +0.0271 on pose-flagged ones (n=11), so it exists
+  # only with pose and is not a constant a single parameter can remove. The
+  # sweep agrees: 0.00 is optimal at 10.820%, against 10.990% at -0.03 and
+  # 10.929% at +0.03. The parameter stays because the transform should be
+  # able to express the offset the calibration report has always measured;
+  # the value stays at zero because the data says so.
+  box_shift_x: 0.00
+  match_iou: 0.30      # Haar box <-> annotated face matching threshold
+  # Which detection to track when the cascade returns several. Milestone 6
+  # found 'largest' picks the subject on only 27.67% of single-face WFLW
+  # images at these settings, because loose settings emit oversized spurious
+  # boxes. scripts/diagnose_face_selection.py measures the rules.
+  # Confidence (cascade level weight) beats largest by about 13 points and,
+  # unlike largest, is flat across detector settings: on failing frames the
+  # winner's level weight is 2.67 BELOW the true face's, so the cascade's own
+  # ordering already knows which box is the face.
+  selection: confidence  # largest | confidence | central | largest_sane | confidence_sane
+  max_size_frac: 0.90  # *_sane rules drop boxes wider than this fraction of
+                       # the shorter image side (a face is not the whole frame)
+  # Profile-face fallback for turned heads: when the frontal cascade finds
+  # nothing, run the profile cascade on the image and its mirror. Off: the
+  # milestone-3 sweep showed tuning beats it and it roughly triples latency.
+  profile_fallback: false
+  profile_cascade: haarcascade_profileface.xml
+
+# ----- milestone 4: training (settings agreed up front; the code that reads
+# ----- them lands in that milestone) -----------------------------------------
+model:
+  input_size: 112      # network input resolution (square, grayscale)
+  num_points: 24
+  width: 32            # channel width; 32 -> ~0.59M params, ~2.4 MB fp32
+train:
+  batch_size: 128
+  num_workers: 2
+  val_fraction: 0.1    # seeded random split of the train cache (WFLW has no
+                       # subject IDs, so a random face split is the only option)
+  pixel_mean: 0.5      # input normalisation: (x/255 - mean) / std
+  pixel_std: 0.5
+  optimizer: adamw     # adamw | adam
+  lr: 0.001
+  weight_decay: 0.0001
+  schedule: cosine
+  epochs: 120
+  early_stopping_patience: 20
+  loss: l2             # l2 | wing  (selectable for the loss comparison)
+  wing: {w: 10.0, epsilon: 2.0}   # in pixels of the model input
+  augment:
+    rotation_deg: 15
+    # Framing factor k relative to preprocess.reference_expand: k = 1.0 is
+    # the canonical box, k = 1.6 is a box 60% wider around the same face.
+    # The old scale: [0.85, 1.15] covered only k in [0.87, 1.18], and
+    # milestone 6 measured deploy framing at about 1.56 with NME growing
+    # roughly linearly outside the trained range (6.7% at k = 1.0 to 24.8%
+    # at k = 1.56). This range covers the deploy envelope and leaves the
+    # calibration free to move without another retrain.
+    framing: [0.85, 1.60]
+    translate_frac: 0.05   # of the model input size
+    brightness: 30         # +- gray levels
+    contrast: 0.2          # alpha in [0.8, 1.2]
+    blur_prob: 0.15
+    flip_prob: 0.5         # horizontal flip WITH landmark index remap
+  resume: false        # true -> restore optimiser/scheduler/epoch/RNG state
+  stop_after_epochs: null   # stop cleanly after N epochs this session
+                            # (Kaggle 12h cap); resume continues identically
+  checkpoint_dir: /kaggle/working/checkpoints
+  metrics_csv: /kaggle/working/metrics.csv
+  curves_png: /kaggle/working/curves.png
+
+# ----- milestone 6: the two swappable landmark detectors ---------------------
+detector:
+  # Refinement stages: 1 disables refinement; 2 predicts from the calibrated
+  # Haar box, rebuilds a canonical box from those points, and predicts again.
+  # It is not a polish step, it is what makes the pipeline work: at the
+  # shipped calibration it is worth 6.609 NME points (16.488% at stage 1 to
+  # 9.879% after stage 2), because stage 1 is deliberately a wide containing
+  # box rather than a well-framed one. A third stage gives 9.753%, so the
+  # process has converged at two and the extra pass is not worth its latency.
+  refine_stages: 2
+  # Framing of the rebuilt box, in the same units as
+  # preprocess.reference_expand. 1.60 from two independent measurements on the
+  # framing-aware model: the section-4 refine sweep wants 1.45 to 1.60, and
+  # section 6 (boxing ground-truth 24 points, detector error removed) puts the
+  # best 24-point expand at 1.60, k = 1.131. The old 1.30 implied k = 0.921,
+  # below the trained envelope: a box around 24 points is tighter than the
+  # box around 98 the cache was built from, so the nominal number was never
+  # the canonical framing.
+  refine_expand: 1.60
+  # Framing for the component-swap row (MediaPipe's face, our model). A box
+  # around 24 points is not the box around 98 points the cache was built
+  # with, so the nominal value is not a calibration: 'auto' uses
+  # reference_expand and prints that it is uncalibrated. Set a number from
+  # scripts/diagnose_deploy_gap.py section 6, chosen on end NME, exactly as
+  # box_scale was chosen in section 3.
+  # 1.60 from section 6, the same 24-point box construction as refine_expand
+  # above. At the nominal 1.30 this path ran at k = 0.921 and scored 10.584%
+  # against 8.949% here, so the 13.776% ablation row was measuring a missing
+  # calibration rather than the front end it is meant to isolate.
+  cross_expand: 1.60
+  # Weights for OUR detector: an exported landmarks24*.pt (preferred) or a
+  # training checkpoint. 'auto' searches /kaggle/input and uses a single
+  # unambiguous hit; several hits raise with the list, never a silent pick.
+  # Every script prints the weights identity and the framing envelope they
+  # were trained for, so a stale upload cannot masquerade as a fresh run.
+  weights: auto
+  mediapipe:
+    min_detection_confidence: 0.5
+    # Tasks API model bundle. 'auto' searches assets/, the repo root and
+    # /kaggle/input the same way the cache and the weights do, and accepts
+    # exactly one unambiguous hit. The 478-point bundle is required: the
+    # pupil indices (468, 473) are iris points, which the 468-point bundle
+    # does not have. The wrapper checks the returned count and says so.
+    model_path: auto
+    model_url: https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+    allow_download: true   # Kaggle notebooks have internet on; set false and
+                           # point model_path at an uploaded dataset if not
+
+# ----- milestone 7: frame-to-frame stability ---------------------------------
+# Sequences are synthesised from stills: a smooth random walk plus sensor
+# noise, with the annotation warped alongside so ground truth is known per
+# frame and jitter can be measured on the residual rather than on the raw
+# trajectory. The amplitudes below are per-frame steps, scaled by the face,
+# and they are deliberately small: this is a camera holding a driver in
+# frame, not a face moving across a room.
+stability:
+  sequences: 30          # stills turned into sequences
+  frames: 60             # frames each; 60 is two seconds at 30 fps
+  translate_frac: 0.010  # per-frame step, as a fraction of the face side
+  rotate_deg: 0.40
+  scale_frac: 0.004
+  smoothness: 0.85       # AR(1) coefficient; real head motion is correlated
+  noise_sigma: 2.0       # gray levels, iid per pixel per frame
+  brightness_amp: 3.0    # gray levels, smooth drift
+  # A blink threshold as a fraction of the sequence's own mean EAR, which is
+  # the per-driver calibration Layer 2 performs. Crossings on a sequence
+  # where the eyes never close are false blinks.
+  blink_threshold_frac: 0.80
+  out_dir: /kaggle/working/m7_stability
+
+# ----- milestone 5: test-set evaluation --------------------------------------
+eval:
+  # Same-session default; for a separate eval session attach the training
+  # notebook's output and pass --checkpoint with its mount path (the script
+  # lists every checkpoint it can see under /kaggle/input if the path is
+  # wrong -- it never auto-picks, since several runs may be attached).
+  checkpoint: /kaggle/working/checkpoints/best.pth
+  out_dir: /kaggle/working/m5_eval
+  batch_size: 256
+  failure_threshold: 0.10   # standard "failure at NME > 10%" criterion
+  cpu_timing_iters: 200
+  save_worst: 12            # worst-K faces rendered with pred vs gt

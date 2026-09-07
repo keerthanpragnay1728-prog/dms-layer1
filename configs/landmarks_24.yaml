@@ -1,0 +1,144 @@
+# =============================================================================
+# Canonical 24-point landmark schema for the DMS perception layer (Layer 1).
+#
+# This file is the SINGLE source of truth for:
+#   * the semantic identity of each of the 24 output points,
+#   * the WFLW 98-point index each one is taken from,
+#   * the horizontal-flip permutation used by training augmentation.
+#
+# Every detector implementation (our model, MediaPipe) must emit points in
+# exactly this order with exactly these semantics. Layer 2 consumes points by
+# these fixed indices and must never need to know which detector produced them.
+#
+# ---------------------------------------------------------------------------
+# LEFT / RIGHT CONVENTION - read before touching anything:
+#   All "left"/"right" names in this project are in IMAGE space, i.e. the
+#   viewer's left (smaller x coordinate on an upright frontal face).
+#   The subject's anatomical right eye is therefore our "left_eye".
+#   Note: the WFLW readme names index 96 the "right pupil" using the
+#   SUBJECT frame - that is the same physical point as our left_pupil.
+#   Pick one frame and stay in it; we picked image space because it is what
+#   you can verify by eye in an overlay.
+#
+# WFLW 98-point layout these indices assume (verify with
+# scripts/verify_layout.py against the real annotation file, and by eye with
+# scripts/visualize_mapping.py, before training anything):
+#   0-32   face contour, image-left temple -> chin (16) -> image-right temple
+#   33-50  eyebrows
+#   51-59  nose (51-54 bridge from brow gap down to TIP at 54; 55-59 bottom)
+#   60-67  image-LEFT eye contour: 60 outer corner, 61-63 upper lid arc
+#          (outer -> inner), 64 inner corner, 65-67 lower lid arc
+#          (inner -> outer)
+#   68-75  image-RIGHT eye contour: 68 inner corner, 69-71 upper lid arc
+#          (inner -> outer), 72 outer corner, 73-75 lower lid arc
+#          (outer -> inner)
+#   76-87  outer lip: 76 left corner, 79 upper mid, 82 right corner,
+#          85 lower mid
+#   88-95  inner lip
+#   96     pupil of the image-left eye
+#   97     pupil of the image-right eye
+#
+# ---------------------------------------------------------------------------
+# Eyelid ordering contract (what Layer 2's EAR relies on):
+#   Each eye is 6 points in the canonical Soukupova & Cech EAR arrangement:
+#   [corner, upper, upper, corner, lower, lower], i.e. the upper lid is traced
+#   by local points 0,1,2 (starting at one corner) and the lower lid by local
+#   points 3,4,5 (starting at the other corner) - three upper, three lower.
+#   With local offsets p0..p5 inside either eye block:
+#       EAR = (|p1 - p5| + |p2 - p4|) / (2 * |p0 - p3|)
+#   The formula is identical for both eyes by construction.
+#   Mouth aspect ratio: MAR = |p16 - p17| / |p14 - p15| (global indices).
+# =============================================================================
+
+# Our 24 points, in output order. `wflw` is the source index in the 98-point
+# annotation. Do not reorder entries: `index` IS the output position.
+points:
+  # --- eyelids: image-left eye (subject's right), EAR block 1 ---------------
+  - {index: 0,  name: left_eye_outer,        group: eyelids, wflw: 60}
+  - {index: 1,  name: left_eye_upper_outer,  group: eyelids, wflw: 61}
+  - {index: 2,  name: left_eye_upper_inner,  group: eyelids, wflw: 63}
+  - {index: 3,  name: left_eye_inner,        group: eyelids, wflw: 64}
+  - {index: 4,  name: left_eye_lower_inner,  group: eyelids, wflw: 65}
+  - {index: 5,  name: left_eye_lower_outer,  group: eyelids, wflw: 67}
+  # --- eyelids: image-right eye (subject's left), EAR block 2 ---------------
+  - {index: 6,  name: right_eye_inner,       group: eyelids, wflw: 68}
+  - {index: 7,  name: right_eye_upper_inner, group: eyelids, wflw: 69}
+  - {index: 8,  name: right_eye_upper_outer, group: eyelids, wflw: 71}
+  - {index: 9,  name: right_eye_outer,       group: eyelids, wflw: 72}
+  - {index: 10, name: right_eye_lower_outer, group: eyelids, wflw: 73}
+  - {index: 11, name: right_eye_lower_inner, group: eyelids, wflw: 75}
+  # --- pupils (the gaze branch is built on these two) -----------------------
+  - {index: 12, name: left_pupil,            group: pupils,  wflw: 96}
+  - {index: 13, name: right_pupil,           group: pupils,  wflw: 97}
+  # --- mouth: outer-lip corners and midpoints (MAR / yawn) ------------------
+  - {index: 14, name: mouth_left_corner,     group: mouth,   wflw: 76}
+  - {index: 15, name: mouth_right_corner,    group: mouth,   wflw: 82}
+  - {index: 16, name: mouth_upper_mid,       group: mouth,   wflw: 79}
+  - {index: 17, name: mouth_lower_mid,       group: mouth,   wflw: 85}
+  # --- vertical facial axis (head pitch) ------------------------------------
+  - {index: 18, name: nose_tip,              group: axis,    wflw: 54}
+  - {index: 19, name: chin,                  group: axis,    wflw: 16}
+  # --- face contour, symmetric pairs (head yaw from left/right asymmetry) ---
+  - {index: 20, name: contour_left_upper,    group: contour, wflw: 4}
+  - {index: 21, name: contour_left_lower,    group: contour, wflw: 8}
+  - {index: 22, name: contour_right_upper,   group: contour, wflw: 28}
+  - {index: 23, name: contour_right_lower,   group: contour, wflw: 24}
+
+# Horizontal-flip permutation: after mirroring an image, the point that must
+# be reported at output slot i is the mirrored coordinate of original point
+# flip_permutation[i]. Left/right blocks swap AND the within-eye corner/arc
+# roles swap (outer stays outer). This is the classic silent landmark-training
+# bug; tests/test_schema.py checks this list is an involution and re-derives
+# it independently from the left_/right_ name pairs.
+flip_permutation: [9, 8, 7, 6, 11, 10,
+                   3, 2, 1, 0, 5, 4,
+                   13, 12,
+                   15, 14, 16, 17,
+                   18, 19,
+                   22, 23, 20, 21]
+
+# Inter-ocular distance for NME normalisation: outer eye corners.
+# (WFLW papers normalise by outer-corner distance, points 60 and 72.)
+nme_normalisation: {left: left_eye_outer, right: right_eye_outer}
+
+# MediaPipe Face Mesh -> the same 24 semantics (milestone 6). Requires the
+# 478-point output: indices 468-477 are the two irises. The legacy solutions
+# API produced them with refine_landmarks=True; the Tasks API the wrapper now
+# uses gets them from the model bundle instead, so the flag below records a
+# REQUIREMENT rather than setting anything. The wrapper checks the returned
+# mesh size against it and refuses a 468-point bundle.
+# Index sources below. They are verified two ways, not assumed:
+# scripts/verify_mediapipe_mapping.py measures each one against WFLW
+# ground truth and reports whether another mesh index would be closer,
+# and scripts/compare_detectors.py renders them for the milestone-1
+# eyeball check.
+#   image-LEFT eye (mesh "right eye"): 33 outer corner, 160 upper toward
+#     outer, 158 upper toward inner, 133 inner corner, 153 lower toward
+#     inner, 144 lower toward outer. This is the standard 6-point EAR set.
+#   image-RIGHT eye (mesh "left eye"): 362 inner, 385 upper inner,
+#     387 upper outer, 263 outer, 373 lower outer, 380 lower inner.
+#   irises: 468 centre of the image-left iris, 473 image-right.
+#   mouth, outer lip: 61 left corner, 291 right corner, 0 upper mid,
+#     17 lower mid.
+#   axis: 1 nose tip, 152 chin (the standard head-pose points).
+#   contour: 234 image-left at ear level, 58 image-left jaw angle,
+#     454 and 288 their mirrors. These approximate WFLW 4/8/28/24; the
+#     contour group is the least precision-critical (yaw comes from
+#     left/right asymmetry) and the cross-detector offset table in
+#     scripts/compare_detectors.py measures how close they sit.
+# Entry i of `indices` feeds our output point i.
+# Optional: further mappings scored alongside the one above, purely to show
+# whether the index choice could decide the ablation. One list, or several
+# named lists. Derive them on the TRAIN split (scripts/verify_mediapipe_mapping.py
+# writes proximity_optimal_indices) and never adopt one from a test-split run.
+#   indices_alt:
+#     proximity: [...]
+#     mixed:     [...]
+mediapipe:
+  refine_landmarks: true
+  indices: [33, 160, 158, 133, 153, 144,
+            362, 385, 387, 263, 373, 380,
+            468, 473,
+            61, 291, 0, 17,
+            1, 152,
+            234, 58, 454, 288]

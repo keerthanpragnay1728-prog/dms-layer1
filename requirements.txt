@@ -1,0 +1,40 @@
+# Dependency policy: nothing beyond this agreed set without asking first
+# (torch, torchvision, opencv-python, numpy, mediapipe, pyyaml, matplotlib).
+# Kaggle/Colab preinstall most of these, so `pip install -r` is fast there.
+# opencv-contrib-python is listed below but is not an addition to that set:
+# it arrives anyway as a mediapipe dependency, and the line only bounds its
+# version.
+
+# milestone 1+ (mapping, loader, visualisation)
+numpy
+# Pinned below 5: the opencv-python 5.0 wheel has no Haar CascadeClassifier
+# and no cascade data files, and the milestone-3 face detector needs the API.
+# 4.x is what Kaggle ships anyway. The cascade XML itself is vendored in
+# assets/ because even 4.x wheel data files are not guaranteed present.
+opencv-python>=4.8,<5
+# Same bound on the contrib distribution, which we do not use directly:
+# mediapipe depends on it, both distributions install the same cv2 package
+# directory, and an unpinned contrib 5.x wheel would otherwise replace the
+# pinned 4.x one. In OpenCV 5 the Haar API lives in contrib, so that would
+# still run, but on a different OpenCV generation than milestone 3 measured.
+# Details in docs/dependency_notes.md.
+opencv-contrib-python>=4.8,<5
+pyyaml
+matplotlib
+
+# milestone 4+ (model + training). torchvision is not needed (no pretrained
+# weights, own dataset pipeline) and stays out until something requires it.
+torch
+
+# milestone 6+ (MediaPipe side of the ablation). Unpinned above 0.10.30, and
+# no protobuf pin: the wrapper uses the Tasks API, which every release from
+# 0.10.30 on ships. The previous exact pin to 0.10.21 (the last release with
+# the legacy solutions API) is gone because that version can no longer be
+# installed on Kaggle at all: it needs protobuf < 5, Kaggle's tensorflow
+# needs protobuf >= 5, and there is no version satisfying both. The full
+# version history is in docs/dependency_notes.md.
+#
+# The Tasks API loads its model from a .task bundle rather than from files
+# inside the wheel. assets/face_landmarker.task is vendored; the config can
+# also point at an uploaded copy or let the wrapper download it.
+mediapipe>=0.10.30
