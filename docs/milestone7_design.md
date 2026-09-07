@@ -130,3 +130,48 @@ and its threshold in units of the EAR's own jitter, which is the quantity that
 generalises beyond the sequences tested. Crossings are also counted in the
 sustained form a blink detector would act on, since a single-frame dip is not
 a blink.
+
+## Suspended: the false-crossing result may be measuring an unresponsive signal
+
+The live viewer shows our EAR moving under 4% between open and closed eyes,
+where the formula halves when the lids halve. Both eyes converge on roughly
+0.213 when closed while the open reading is 0.196 and 0.246, so the left eye
+reads HIGHER closed than open. That is the signature of a prediction
+collapsing to a fixed eyelid shape rather than of a shape that moves too
+little, since a weak but real response would keep the sign.
+
+Until that is resolved, part of this milestone's section 5 has to be read
+differently.
+
+**What still stands.** The jitter numbers are valid measurements of jitter.
+So are the box measurements, the dropout structure, the refinement result and
+everything in sections 1 to 4. None of them depend on the EAR moving.
+
+**What is suspended.** "Zero false crossings for both deployed paths" and the
+margin in units of jitter. A signal that does not move cannot cross a
+threshold, and a constant has infinite margin, so both numbers are trivially
+satisfied by an unresponsive model and cannot distinguish it from a good one.
+The synthesised sequences make this worse rather than better: they are 2D
+warps of stills, so no eye in them ever closes, and the ground-truth EAR is
+near-constant by construction. The control confirmed the truth crosses
+nothing; it could not confirm that the truth ever moved.
+
+It also puts a claim from milestone 6 back in question. "The landmark gap
+does not reach the decision" rested on both detectors producing no false
+crossings. If our EAR does not respond to closure then the honest statement
+is the opposite and stronger: our EAR may not carry the decision signal at
+all, which is a Layer 1 failure rather than a Layer 1 success.
+
+One number worth rereading in that light: our EAR jitter on ground-truth
+boxes, 0.0078, is LOWER than MediaPipe's 0.0101. Read as stability that
+flatters us. Read against an unresponsive signal it is what a constant looks
+like.
+
+**What the milestone needs before section 5 can be reported.** A
+responsiveness measurement alongside the stability one. Stability without
+responsiveness is not a property worth having, and the two must appear
+together or the first will be read as the second.
+`scripts/diagnose_ear_response.py` provides it in the form the comparison
+already uses: the slope of predicted EAR against ground-truth EAR, which is
+near 1 for a model that tracks the lids and near 0 for one that has learned a
+fixed shape, measured beside MediaPipe on the same faces.

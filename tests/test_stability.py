@@ -173,3 +173,42 @@ def test_sustained_crossings_ignore_single_frame_dips():
     sig[30:35] = 0.10                  # a real closure
     assert sustained_crossing_rate(sig, 0.2, 3) > 0
     assert crossing_rate(sig, 0.2) > sustained_crossing_rate(sig, 0.2, 3)
+
+
+def _close_eyes(pts24: np.ndarray, frac: float) -> np.ndarray:
+    """Move each eye's lid points toward their own midline: frac 0 is open,
+    1 is shut."""
+    out = np.array(pts24, dtype=np.float64, copy=True)
+    for lo in (0, 6):
+        eye = out[lo:lo + 6]
+        mid = eye[[1, 2, 4, 5], 1].mean()
+        for i in (1, 2, 4, 5):
+            eye[i, 1] = mid + (eye[i, 1] - mid) * (1 - frac)
+        out[lo:lo + 6] = eye
+    return out
+
+
+def test_ear_responds_to_closure():
+    """The formula must halve when the lids halve. A live model showed EAR
+    moving under 4% between open and closed eyes; this pins the signal
+    definition so that investigation can never be about the arithmetic."""
+    p = canonical_landmarks98()[SCHEMA.wflw_indices]
+    values = [float(np.mean(signals.ear(_close_eyes(p, f))))
+              for f in (0.0, 0.25, 0.5, 0.75, 1.0)]
+    assert all(a > b for a, b in zip(values, values[1:])), values
+    assert values[-1] < 1e-9, "a shut eye must read zero"
+    assert abs(values[2] / values[0] - 0.5) < 0.05, "half closed should halve it"
+
+
+def test_ear_slope_separates_a_tracking_model_from_a_fixed_shape():
+    """The diagnostic in scripts/diagnose_ear_response.py turns on one
+    number: the slope of predicted EAR against true EAR. This checks that the
+    number does what it is asked to do before it is used on real data."""
+    p = canonical_landmarks98()[SCHEMA.wflw_indices]
+    rng = np.random.default_rng(0)
+    truth = np.array([float(np.mean(signals.ear(_close_eyes(p, f))))
+                      for f in rng.uniform(0.0, 0.9, 300)])
+    tracking = truth + rng.normal(0, 0.01, len(truth))
+    fixed = np.full(len(truth), truth.mean()) + rng.normal(0, 0.01, len(truth))
+    assert abs(np.polyfit(truth, tracking, 1)[0] - 1.0) < 0.05
+    assert abs(np.polyfit(truth, fixed, 1)[0]) < 0.05

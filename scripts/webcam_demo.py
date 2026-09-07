@@ -213,8 +213,17 @@ def draw_overlay(view: np.ndarray, det, schema, points, ear_now, baseline,
                        cv2.LINE_AA)
             cv2.circle(view, (int(round(x)), int(round(y))), 3, c, -1, cv2.LINE_AA)
 
+    mp_pts = state.get("mp_points")
+    if mp_pts is not None:
+        # rings, so MediaPipe's eyelids can be compared against our solid dots
+        # on the same face: the eye that closes is the one to watch
+        for p_ in schema.points:
+            x, y = mp_pts[p_.index]
+            cv2.circle(view, (int(round(x)), int(round(y))), 5,
+                       GROUP_COLORS[p_.group], 1, cv2.LINE_AA)
+
     panel = view.copy()
-    cv2.rectangle(panel, (0, 0), (w, 96), (25, 25, 25), -1)
+    cv2.rectangle(panel, (0, 0), (w, 118), (25, 25, 25), -1)
     cv2.addWeighted(panel, 0.65, view, 0.35, 0, view)
     line1 = f"{fps:5.1f} fps   inference {infer_ms:5.0f} ms   {w}x{h}"
     cv2.putText(view, line1, (12, 24), FONT, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
@@ -229,8 +238,16 @@ def draw_overlay(view: np.ndarray, det, schema, points, ear_now, baseline,
                     f"R {state['ear_r']:.3f}  baseline {baseline:5.3f} "
                     f"({rel * 100:3.0f}%)", (12, 48), FONT, 0.55, colour, 1,
                     cv2.LINE_AA)
+    mp_ear = state.get("mp_ear")
+    if mp_ear is not None:
+        cv2.putText(view, f"mp  {mp_ear:5.3f}  L {state['mp_l']:.3f} "
+                    f"R {state['mp_r']:.3f}   (rings)", (12, 70), FONT, 0.55,
+                    (255, 200, 120), 1, cv2.LINE_AA)
+    elif state.get("mp_shown"):
+        cv2.putText(view, "mp     -- (no face)", (12, 70), FONT, 0.55,
+                    (150, 150, 150), 1, cv2.LINE_AA)
     cv2.putText(view, f"dropped {100 * state['dropout']:4.1f}% of the last "
-                f"{state['window']} frames", (12, 70), FONT, 0.5,
+                f"{state['window']} frames", (12, 92), FONT, 0.5,
                 (200, 200, 200), 1, cv2.LINE_AA)
 
     # Recording state gets its own strip along the bottom: on a narrow
@@ -248,7 +265,7 @@ def draw_overlay(view: np.ndarray, det, schema, points, ear_now, baseline,
                     (36, h - 10), FONT, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     else:
         cv2.putText(view, f"r record [{label}]   1 still  2 natural  3 turn   "
-                    "m mirror   q quit", (12, h - 10), FONT, 0.45,
+                    "m mirror   p mp points   q quit", (12, h - 10), FONT, 0.45,
                     (190, 190, 190), 1, cv2.LINE_AA)
     return view
 
@@ -278,6 +295,11 @@ def main() -> int:
                     help="mp4v is in every OpenCV wheel; avc1 is the H.264 "
                          "the protocol asks for and is often absent, in which "
                          "case the probe prints ffmpeg errors and falls back")
+    ap.add_argument("--no-mediapipe", action="store_true",
+                    help="skip the MediaPipe reference row")
+    ap.add_argument("--log-csv", default=None,
+                    help="write a per-frame row of both EARs, so an open/closed "
+                         "sequence can be analysed rather than read off screen")
     ap.add_argument("--no-mirror", action="store_true")
     args = ap.parse_args()
 
@@ -286,6 +308,18 @@ def main() -> int:
     weights = args.weights or str(resolve_asset(
         "auto", WEIGHT_PATTERNS, "trained landmark weights"))
     det = OurLandmarkDetector(cfg, weights=weights)
+
+    mp_det = None
+    if not args.no_mediapipe:
+        try:
+            from dms_layer1.detect.mediapipe_detector import (
+                MediaPipeLandmarkDetector, MediaPipeUnavailable)
+            try:
+                mp_det = MediaPipeLandmarkDetector(cfg, schema)
+            except MediaPipeUnavailable as e:
+                print(f"mediapipe unavailable, ours only: {e}")
+        except ImportError as e:
+            print(f"mediapipe import failed, ours only: {e}")
 
     backends = {"dshow": cv2.CAP_DSHOW, "msmf": cv2.CAP_MSMF, "any": cv2.CAP_ANY}
     if args.backend == "auto":
@@ -319,7 +353,16 @@ def main() -> int:
     ear_hist: deque = deque(maxlen=int(BASELINE_SECONDS * 10))
     state = {"segment": segment, "recording": False, "rec_seconds": 0.0,
              "rec_frames": 0, "dropout": 0.0, "window": 0, "ear_l": 0.0,
-             "ear_r": 0.0}
+             "ear_r": 0.0, "mp_l": 0.0, "mp_r": 0.0, "mp_ear": None,
+             "mp_points": None, "mp_shown": mp_det is not None}
+    seen = {"ours": [], "mediapipe": []}
+    show_mp_points = mp_det is not None
+    csv_file = None
+    if args.log_csv:
+        csv_file = open(args.log_csv, "w")
+        csv_file.write("time,ours_ear,ours_l,ours_r,mp_ear,mp_l,mp_r,"
+                       "ours_found,mp_found\n")
+        print(f"logging both EARs to {args.log_csv}")
     print("\nwindow keys: r record, 1/2/3 segment, m mirror, q quit")
 
     while cam.alive:
@@ -346,7 +389,29 @@ def main() -> int:
             ear_now = float(np.mean([left, right]))
             state["ear_l"], state["ear_r"] = left, right
             ear_hist.append(ear_now)
+            seen["ours"].append(ear_now)
         baseline = float(np.median(ear_hist)) if ear_hist else 0.0
+
+        # MediaPipe on the SAME frame, as the reference for what a responsive
+        # model does with the same EAR definition: if it halves on a blink and
+        # ours does not, the formula and the mapping are not the problem.
+        mp_points = mp_ear = None
+        if mp_det is not None:
+            mp_out = mp_det.detect(view)
+            if mp_out is not None:
+                mp_points = mp_out.points.astype(np.float64)
+                ml, mr = signals.ear(mp_points)
+                mp_ear = float(np.mean([ml, mr]))
+                state["mp_l"], state["mp_r"] = ml, mr
+                seen["mediapipe"].append(mp_ear)
+        state["mp_ear"] = mp_ear
+        state["mp_points"] = mp_points if show_mp_points else None
+        if csv_file is not None:
+            csv_file.write(f"{time.time():.6f},{'' if ear_now is None else f'{ear_now:.5f}'},"
+                           f"{state['ear_l']:.5f},{state['ear_r']:.5f},"
+                           f"{'' if mp_ear is None else f'{mp_ear:.5f}'},"
+                           f"{state['mp_l']:.5f},{state['mp_r']:.5f},"
+                           f"{int(points is not None)},{int(mp_points is not None)}\n")
 
         fps = ((len(times) - 1) / (times[-1] - times[0])
                if len(times) > 1 and times[-1] > times[0] else 0.0)
@@ -362,6 +427,8 @@ def main() -> int:
             break
         if key == ord("m"):
             mirror = not mirror
+        if key == ord("p"):
+            show_mp_points = not show_mp_points
         if key in SEGMENTS and not cam.recording:
             segment = SEGMENTS[key]
             print(f"next recording will be labelled '{segment}'")
@@ -392,6 +459,28 @@ def main() -> int:
 
     cam.release()
     cv2.destroyAllWindows()
+    if csv_file is not None:
+        csv_file.close()
+        print(f"wrote {args.log_csv}")
+    print("\nEAR range over the session (open your eyes wide and close them "
+          "fully at least once for this to mean anything):")
+    for name, vals in seen.items():
+        if len(vals) < 5:
+            print(f"  {name:<11} too few frames ({len(vals)})")
+            continue
+        a = np.array(vals)
+        print(f"  {name:<11} min {a.min():.3f}  p10 {np.percentile(a, 10):.3f}  "
+              f"median {np.median(a):.3f}  p90 {np.percentile(a, 90):.3f}  "
+              f"max {a.max():.3f}   range {a.max() - a.min():.3f}")
+    if len(seen["ours"]) > 5 and len(seen["mediapipe"]) > 5:
+        o, m = np.array(seen["ours"]), np.array(seen["mediapipe"])
+        print(f"  ratio of ranges, ours to mediapipe: "
+              f"{(o.max() - o.min()) / max(m.max() - m.min(), 1e-9):.2f}")
+        print("  A responsive EAR roughly halves on a full blink. If MediaPipe "
+              "spans that and ours does not, the gap is our landmark model, "
+              "not the EAR formula or the mapping.")
+    if mp_det is not None:
+        mp_det.close()
     return 0
 
 
