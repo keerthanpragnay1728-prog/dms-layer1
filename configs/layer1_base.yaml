@@ -148,7 +148,12 @@ train:
   schedule: cosine
   epochs: 120
   early_stopping_patience: 20
-  loss: l2             # l2 | wing  (selectable for the loss comparison)
+  # l2 | wing, selectable for the loss comparison. Wing is the baseline and
+  # has been since milestone 4: best val NME 5.386% against L2's 7.285%, and
+  # milestone 5 confirmed it wins every row on the test split. This line said
+  # l2 until milestone 7, so a retrain from this config would have silently
+  # reproduced the losing run rather than the shipped one.
+  loss: wing
   wing: {w: 10.0, epsilon: 2.0}   # in pixels of the model input
   augment:
     rotation_deg: 15
